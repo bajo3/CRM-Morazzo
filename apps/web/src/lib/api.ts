@@ -1,5 +1,9 @@
 const API_BASE_URL = import.meta.env.VITE_API_URL ?? "http://localhost:4000/api";
 
+export function getApiBaseUrl() {
+  return API_BASE_URL;
+}
+
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     headers: {
@@ -15,4 +19,3 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
 
   return response.json() as Promise<T>;
 }
-

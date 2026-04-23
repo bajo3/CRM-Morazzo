@@ -83,6 +83,26 @@ async function run() {
     await db.insert(scheduleEntries).values(row).onConflictDoUpdate({ target: scheduleEntries.id, set: row });
   }
 
+  await sql.unsafe(`
+    select setval(
+      'quotes_visible_number_seq',
+      greatest(
+        coalesce((select max(substring(quote_number from '[0-9]+$')::bigint) from quotes), 0),
+        1
+      ),
+      coalesce((select max(substring(quote_number from '[0-9]+$')::bigint) from quotes), 0) > 0
+    );
+
+    select setval(
+      'work_orders_visible_number_seq',
+      greatest(
+        coalesce((select max(substring(work_order_number from '[0-9]+$')::bigint) from work_orders), 0),
+        1
+      ),
+      coalesce((select max(substring(work_order_number from '[0-9]+$')::bigint) from work_orders), 0) > 0
+    );
+  `);
+
   await sql.end();
 }
 

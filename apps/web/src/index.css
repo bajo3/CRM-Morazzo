@@ -4,8 +4,10 @@
 
 :root {
   font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
-  color: #1f2521;
-  background: #f4f1ea;
+  color: #233235;
+  background:
+    radial-gradient(circle at top left, rgba(173, 190, 183, 0.22), transparent 28%),
+    linear-gradient(180deg, #f7f4ee 0%, #efe8dc 100%);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -24,4 +26,14 @@ body,
 
 body {
   margin: 0;
+  background:
+    radial-gradient(circle at top left, rgba(173, 190, 183, 0.22), transparent 28%),
+    linear-gradient(180deg, #f7f4ee 0%, #efe8dc 100%);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
 }

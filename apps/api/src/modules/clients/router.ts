@@ -1,17 +1,29 @@
 import { createClientSchema } from "@crm/shared";
-import { asc } from "drizzle-orm";
+import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import { Router } from "express";
 import { v7 as uuidv7 } from "uuid";
 
 import { db } from "../../db/client";
-import { clients } from "../../db/schema";
+import { clients, payments, quotes, scheduleEntries, workOrders } from "../../db/schema";
 import { handleRouteError, parseBody } from "../../lib/http";
 
 export const clientsRouter = Router();
 
 clientsRouter.get("/", async (_request, response) => {
   try {
-    const rows = await db.select().from(clients).orderBy(asc(clients.name));
+    const rows = await db
+      .select({
+        id: clients.id,
+        name: clients.name,
+        phone: clients.phone,
+        address: clients.address,
+        jobSite: clients.jobSite,
+        notes: clients.notes,
+      })
+      .from(clients)
+      .where(isNull(clients.deletedAt))
+      .orderBy(asc(clients.name));
+
     response.json({ ok: true, data: rows });
   } catch (error) {
     handleRouteError(error, response);
@@ -35,3 +47,89 @@ clientsRouter.post("/", async (request, response) => {
   }
 });
 
+clientsRouter.put("/:id", async (request, response) => {
+  try {
+    const payload = parseBody(createClientSchema, request);
+    const [updated] = await db
+      .update(clients)
+      .set({
+        ...payload,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(clients.id, request.params.id), isNull(clients.deletedAt)))
+      .returning();
+
+    if (!updated) {
+      response.status(404).json({ ok: false, error: "Client not found" });
+      return;
+    }
+
+    response.json({ ok: true, data: updated });
+  } catch (error) {
+    handleRouteError(error, response);
+  }
+});
+
+clientsRouter.delete("/:id", async (request, response) => {
+  try {
+    const [existing] = await db
+      .select({
+        id: clients.id,
+        name: clients.name,
+      })
+      .from(clients)
+      .where(and(eq(clients.id, request.params.id), isNull(clients.deletedAt)));
+
+    if (!existing) {
+      response.status(404).json({ ok: false, error: "Client not found" });
+      return;
+    }
+
+    const [related] = await db
+      .select({
+        quotesCount: sql<number>`(select count(*) from ${quotes} where ${quotes.clientId} = ${clients.id})`,
+        workOrdersCount: sql<number>`(select count(*) from ${workOrders} where ${workOrders.clientId} = ${clients.id})`,
+        paymentsCount: sql<number>`(select count(*) from ${payments} where ${payments.clientId} = ${clients.id})`,
+        scheduleCount: sql<number>`(select count(*) from ${scheduleEntries} where ${scheduleEntries.clientId} = ${clients.id})`,
+      })
+      .from(clients)
+      .where(eq(clients.id, request.params.id));
+
+    const hasHistory =
+      Number(related?.quotesCount ?? 0) > 0 ||
+      Number(related?.workOrdersCount ?? 0) > 0 ||
+      Number(related?.paymentsCount ?? 0) > 0 ||
+      Number(related?.scheduleCount ?? 0) > 0;
+
+    if (hasHistory) {
+      const [archived] = await db
+        .update(clients)
+        .set({
+          deletedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(clients.id, request.params.id))
+        .returning();
+
+      response.json({
+        ok: true,
+        data: {
+          mode: "archived",
+          client: archived,
+        },
+      });
+      return;
+    }
+
+    const [deleted] = await db.delete(clients).where(eq(clients.id, request.params.id)).returning();
+    response.json({
+      ok: true,
+      data: {
+        mode: "deleted",
+        client: deleted,
+      },
+    });
+  } catch (error) {
+    handleRouteError(error, response);
+  }
+});

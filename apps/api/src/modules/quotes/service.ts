@@ -3,54 +3,29 @@ import {
   calculateQuoteTotals,
   canTransitionQuoteStatus,
   createQuoteSchema,
-  formatQuoteNumber,
-  formatWorkOrderNumber,
   fromAreaBasisPoints,
   toAreaBasisPoints,
 } from "@crm/shared";
-import { and, count, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { v7 as uuidv7 } from "uuid";
 
 import { db } from "../../db/client";
-import { clients, quoteItems, quotes, workOrderItems, workOrders } from "../../db/schema";
+import { clients, payments, quoteItems, quotes, workOrderItems, workOrders } from "../../db/schema";
 
-export async function nextQuoteNumber() {
-  const [result] = await db.select({ value: count() }).from(quotes);
-  return formatQuoteNumber(result.value + 1);
-}
-
-export async function nextWorkOrderNumber() {
-  const [result] = await db.select({ value: count() }).from(workOrders);
-  return formatWorkOrderNumber(result.value + 1);
-}
-
-export async function createQuote(payload: unknown) {
-  const parsed = createQuoteSchema.parse(payload);
-  const calculatedItems = parsed.items.map((item) => calculateQuoteItem(item));
+function buildQuoteItemRows(
+  quoteId: string,
+  items: ReturnType<typeof createQuoteSchema.parse>["items"],
+) {
+  const calculatedItems = items.map((item) => calculateQuoteItem(item));
   const totals = calculateQuoteTotals(calculatedItems);
 
-  const [createdQuote] = await db
-    .insert(quotes)
-    .values({
-      id: uuidv7(),
-      quoteNumber: await nextQuoteNumber(),
-      clientId: parsed.clientId,
-      issueDate: parsed.issueDate,
-      validUntil: parsed.validUntil ?? null,
-      notes: parsed.notes ?? null,
-      internalNotes: parsed.internalNotes ?? null,
-      subtotalCents: totals.subtotalCents,
-      extrasTotalCents: totals.extrasTotalCents,
-      totalCents: totals.totalCents,
-    })
-    .returning();
-
-  await db.insert(quoteItems).values(
-    parsed.items.map((item, index) => {
+  return {
+    totals,
+    rows: items.map((item, index) => {
       const calculated = calculatedItems[index];
       return {
         id: uuidv7(),
-        quoteId: createdQuote.id,
+        quoteId,
         glassTypeId: item.glassTypeId ?? null,
         description: item.description,
         widthMm: item.widthMm,
@@ -64,9 +39,68 @@ export async function createQuote(payload: unknown) {
         extraBreakdown: calculated.extras,
       };
     }),
-  );
+  };
+}
 
-  return getQuoteDetail(createdQuote.id);
+export async function createQuote(payload: unknown) {
+  const parsed = createQuoteSchema.parse(payload);
+  const quoteId = uuidv7();
+  const { totals, rows } = buildQuoteItemRows(quoteId, parsed.items);
+
+  await db.transaction(async (tx) => {
+    await tx.insert(quotes).values({
+      id: quoteId,
+      clientId: parsed.clientId,
+      issueDate: parsed.issueDate,
+      validUntil: parsed.validUntil ?? null,
+      notes: parsed.notes ?? null,
+      internalNotes: parsed.internalNotes ?? null,
+      subtotalCents: totals.subtotalCents,
+      extrasTotalCents: totals.extrasTotalCents,
+      totalCents: totals.totalCents,
+    });
+
+    await tx.insert(quoteItems).values(rows);
+  });
+
+  return getQuoteDetail(quoteId);
+}
+
+export async function updateQuote(quoteId: string, payload: unknown) {
+  const parsed = createQuoteSchema.parse(payload);
+
+  const [existingQuote] = await db.select().from(quotes).where(eq(quotes.id, quoteId));
+  if (!existingQuote) {
+    return null;
+  }
+
+  if (existingQuote.status !== "draft" && existingQuote.status !== "sent") {
+    throw new Error("Only draft or sent quotes can be edited");
+  }
+
+  const { totals, rows } = buildQuoteItemRows(quoteId, parsed.items);
+
+  await db.transaction(async (tx) => {
+    await tx
+      .update(quotes)
+      .set({
+        clientId: parsed.clientId,
+        issueDate: parsed.issueDate,
+        validUntil: parsed.validUntil ?? null,
+        notes: parsed.notes ?? null,
+        internalNotes: parsed.internalNotes ?? null,
+        subtotalCents: totals.subtotalCents,
+        extrasTotalCents: totals.extrasTotalCents,
+        totalCents: totals.totalCents,
+        updatedAt: new Date(),
+      })
+      .where(eq(quotes.id, quoteId));
+
+    await tx.delete(quoteItems).where(eq(quoteItems.quoteId, quoteId));
+    await tx.insert(quoteItems).values(rows);
+  });
+
+  return getQuoteDetail(quoteId);
 }
 
 export async function getQuoteDetail(quoteId: string) {
@@ -114,13 +148,44 @@ export async function listQuotes() {
     .select({
       id: quotes.id,
       quoteNumber: quotes.quoteNumber,
+      clientId: quotes.clientId,
       status: quotes.status,
       issueDate: quotes.issueDate,
       totalCents: quotes.totalCents,
       clientName: clients.name,
     })
     .from(quotes)
-    .innerJoin(clients, eq(quotes.clientId, clients.id));
+    .innerJoin(clients, eq(quotes.clientId, clients.id))
+    .orderBy(desc(quotes.createdAt));
+}
+
+export async function getWorkOrderDetail(workOrderId: string) {
+  const [workOrder] = await db
+    .select({
+      id: workOrders.id,
+      workOrderNumber: workOrders.workOrderNumber,
+      quoteId: workOrders.quoteId,
+      clientId: workOrders.clientId,
+      clientName: clients.name,
+      status: workOrders.status,
+      promisedDate: workOrders.promisedDate,
+      internalNotes: workOrders.internalNotes,
+      createdAt: workOrders.createdAt,
+    })
+    .from(workOrders)
+    .innerJoin(clients, eq(workOrders.clientId, clients.id))
+    .where(eq(workOrders.id, workOrderId));
+
+  if (!workOrder) {
+    return null;
+  }
+
+  const items = await db.select().from(workOrderItems).where(eq(workOrderItems.workOrderId, workOrderId));
+
+  return {
+    ...workOrder,
+    items,
+  };
 }
 
 export async function approveQuote(quoteId: string) {
@@ -160,7 +225,6 @@ export async function approveQuote(quoteId: string) {
     .insert(workOrders)
     .values({
       id: uuidv7(),
-      workOrderNumber: await nextWorkOrderNumber(),
       quoteId: detail.id,
       clientId: detail.clientId,
       status: "pending",
@@ -196,3 +260,27 @@ export async function getWorkOrderByQuote(quoteId: string) {
   return workOrder ?? null;
 }
 
+export async function deleteQuote(quoteId: string) {
+  const [quote] = await db.select().from(quotes).where(eq(quotes.id, quoteId));
+
+  if (!quote) {
+    return { status: "not_found" } as const;
+  }
+
+  if (quote.status !== "draft" && quote.status !== "sent") {
+    return { status: "blocked", reason: "Solo se pueden borrar presupuestos en borrador o enviados." } as const;
+  }
+
+  const [workOrder] = await db.select({ id: workOrders.id }).from(workOrders).where(eq(workOrders.quoteId, quoteId));
+  if (workOrder) {
+    return { status: "blocked", reason: "El presupuesto ya genero una orden de trabajo." } as const;
+  }
+
+  const [payment] = await db.select({ id: payments.id }).from(payments).where(eq(payments.quoteId, quoteId));
+  if (payment) {
+    return { status: "blocked", reason: "El presupuesto ya tiene pagos registrados." } as const;
+  }
+
+  const [deleted] = await db.delete(quotes).where(eq(quotes.id, quoteId)).returning();
+  return { status: "deleted", data: deleted } as const;
+}

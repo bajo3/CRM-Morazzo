@@ -2,10 +2,14 @@ import { createBrowserRouter } from "react-router-dom";
 
 import { AppShell } from "../components/layout/app-shell";
 import { CalculatorPage } from "../features/calculator/calculator-page";
+import { CashPage } from "../features/cash/cash-page";
 import { ClientsPage } from "../features/clients/clients-page";
 import { DashboardPage } from "../features/dashboard/dashboard-page";
-import { PlaceholderPage } from "../features/placeholder/placeholder-page";
+import { QuotesPage } from "../features/quotes/quotes-page";
+import { SchedulePage } from "../features/schedule/schedule-page";
 import { SettingsPage } from "../features/settings/settings-page";
+import { StockPage } from "../features/stock/stock-page";
+import { WorkOrdersPage } from "../features/work-orders/work-orders-page";
 
 export const router = createBrowserRouter([
   {
@@ -30,48 +34,23 @@ export const router = createBrowserRouter([
       },
       {
         path: "presupuestos",
-        element: (
-          <PlaceholderPage
-            title="Presupuestos"
-            description="Se apoya en la formula compartida, PDF en backend y estados centralizados."
-          />
-        ),
+        element: <QuotesPage />,
       },
       {
         path: "ordenes",
-        element: (
-          <PlaceholderPage
-            title="Ordenes de trabajo"
-            description="Nacen desde presupuesto aprobado y siguen un estado operativo simple."
-          />
-        ),
+        element: <WorkOrdersPage />,
       },
       {
         path: "stock",
-        element: (
-          <PlaceholderPage
-            title="Stock"
-            description="Stock simple de hojas enteras con movimientos de ingreso, uso, rotura y ajuste."
-          />
-        ),
+        element: <StockPage />,
       },
       {
         path: "caja",
-        element: (
-          <PlaceholderPage
-            title="Caja"
-            description="Caja simple con ingresos, egresos y trazabilidad de pagos."
-          />
-        ),
+        element: <CashPage />,
       },
       {
         path: "agenda",
-        element: (
-          <PlaceholderPage
-            title="Agenda"
-            description="Entregas y colocaciones con estado, fecha, horario y observaciones."
-          />
-        ),
+        element: <SchedulePage />,
       },
     ],
   },

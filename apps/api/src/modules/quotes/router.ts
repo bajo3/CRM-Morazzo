@@ -2,7 +2,7 @@ import { Router } from "express";
 
 import { handleRouteError } from "../../lib/http";
 import { buildQuotePdf } from "./pdf";
-import { approveQuote, createQuote, getQuoteDetail, listQuotes } from "./service";
+import { approveQuote, createQuote, deleteQuote, getQuoteDetail, listQuotes, updateQuote } from "./service";
 
 export const quotesRouter = Router();
 
@@ -39,6 +39,21 @@ quotesRouter.get("/:id", async (request, response) => {
   }
 });
 
+quotesRouter.put("/:id", async (request, response) => {
+  try {
+    const updated = await updateQuote(request.params.id, request.body);
+
+    if (!updated) {
+      response.status(404).json({ ok: false, error: "Quote not found" });
+      return;
+    }
+
+    response.json({ ok: true, data: updated });
+  } catch (error) {
+    handleRouteError(error, response);
+  }
+});
+
 quotesRouter.get("/:id/pdf", async (request, response) => {
   try {
     const detail = await getQuoteDetail(request.params.id);
@@ -56,6 +71,8 @@ quotesRouter.get("/:id/pdf", async (request, response) => {
       clientPhone: detail.clientPhone,
       clientAddress: detail.clientAddress,
       notes: detail.notes,
+      subtotalCents: detail.subtotalCents,
+      extrasTotalCents: detail.extrasTotalCents,
       totalCents: detail.totalCents,
       items: detail.items.map((item) => ({
         description: item.description,
@@ -89,3 +106,22 @@ quotesRouter.post("/:id/approve", async (request, response) => {
   }
 });
 
+quotesRouter.delete("/:id", async (request, response) => {
+  try {
+    const result = await deleteQuote(request.params.id);
+
+    if (result.status === "not_found") {
+      response.status(404).json({ ok: false, error: "Quote not found" });
+      return;
+    }
+
+    if (result.status === "blocked") {
+      response.status(409).json({ ok: false, error: result.reason });
+      return;
+    }
+
+    response.json({ ok: true, data: result.data });
+  } catch (error) {
+    handleRouteError(error, response);
+  }
+});

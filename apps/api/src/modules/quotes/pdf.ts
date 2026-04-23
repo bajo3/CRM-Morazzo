@@ -10,6 +10,8 @@ type QuotePdfData = {
   clientPhone: string | null;
   clientAddress: string | null;
   notes: string | null;
+  subtotalCents: number;
+  extrasTotalCents: number;
   totalCents: number;
   items: Array<{
     description: string;
@@ -30,9 +32,9 @@ export async function buildQuotePdf(data: QuotePdfData) {
   const accent = rgb(0.16, 0.37, 0.38);
 
   let y = 790;
-  page.drawText("Vidrieria F. Morazzo", { x: 50, y, size: 22, font: bold, color: dark });
+  page.drawText("Facundo Morazzo", { x: 50, y, size: 22, font: bold, color: dark });
   y -= 24;
-  page.drawText("Presupuesto", { x: 50, y, size: 11, font, color: muted });
+  page.drawText("Vidrieria · Presupuesto", { x: 50, y, size: 11, font, color: muted });
 
   page.drawRectangle({ x: 380, y: 760, width: 165, height: 54, color: rgb(0.94, 0.96, 0.95) });
   page.drawText(`Nro: ${data.quoteNumber}`, { x: 392, y: 794, size: 10, font: bold, color: dark });
@@ -71,6 +73,13 @@ export async function buildQuotePdf(data: QuotePdfData) {
     y -= 18;
   }
 
+  y -= 12;
+  page.drawLine({ start: { x: 50, y }, end: { x: 545, y }, thickness: 1, color: rgb(0.9, 0.9, 0.88) });
+  y -= 22;
+  page.drawText(`Subtotal: ${formatCurrencyFromCents(data.subtotalCents)}`, { x: 330, y, size: 10, font, color: dark });
+  y -= 16;
+  page.drawText(`Extras: ${formatCurrencyFromCents(data.extrasTotalCents)}`, { x: 330, y, size: 10, font, color: dark });
+
   if (data.notes) {
     y -= 16;
     page.drawText("Observaciones", { x: 50, y, size: 11, font: bold, color: accent });
@@ -84,4 +93,3 @@ export async function buildQuotePdf(data: QuotePdfData) {
 
   return pdf.save();
 }
-

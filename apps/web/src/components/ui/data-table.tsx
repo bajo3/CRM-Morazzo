@@ -12,9 +12,10 @@ type DataTableProps<T> = {
   rows: T[];
   emptyTitle: string;
   emptyDescription: string;
+  getRowKey?: (row: T, index: number) => string;
 };
 
-export function DataTable<T>({ columns, rows, emptyTitle, emptyDescription }: DataTableProps<T>) {
+export function DataTable<T>({ columns, rows, emptyTitle, emptyDescription, getRowKey }: DataTableProps<T>) {
   if (rows.length === 0) {
     return (
       <div className="rounded-2xl border border-dashed border-line bg-stone-50 p-8 text-center">
@@ -39,7 +40,10 @@ export function DataTable<T>({ columns, rows, emptyTitle, emptyDescription }: Da
           </thead>
           <tbody className="divide-y divide-stone-100">
             {rows.map((row, index) => (
-              <tr key={index} className="hover:bg-stone-50/70">
+              <tr
+                key={getRowKey ? getRowKey(row, index) : typeof row === "object" && row !== null && "id" in row ? String(row.id) : index}
+                className="hover:bg-stone-50/70"
+              >
                 {columns.map((column) => (
                   <td key={column.key} className={`px-4 py-3 text-sm text-stone-700 ${column.className ?? ""}`}>
                     {column.render(row)}
@@ -53,4 +57,3 @@ export function DataTable<T>({ columns, rows, emptyTitle, emptyDescription }: Da
     </div>
   );
 }
-
