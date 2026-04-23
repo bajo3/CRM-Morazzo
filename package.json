@@ -1,0 +1,36 @@
+{
+  "name": "crmfmorazzo",
+  "private": true,
+  "version": "0.1.0",
+  "description": "MVP operativo para vidrieria",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run build -w @crm/shared && npm-run-all --parallel dev:shared dev:web dev:api",
+    "dev:shared": "npm run dev -w @crm/shared",
+    "dev:web": "npm run dev -w @crm/web",
+    "dev:api": "npm run dev -w @crm/api",
+    "build": "npm run build -w @crm/shared && npm run build -w @crm/api && npm run build -w @crm/web",
+    "lint": "npm run lint -w @crm/shared && npm run lint -w @crm/api && npm run lint -w @crm/web",
+    "typecheck": "npm run typecheck -w @crm/shared && npm run typecheck -w @crm/api && npm run typecheck -w @crm/web",
+    "db:generate": "npm run db:generate -w @crm/api",
+    "db:migrate": "npm run db:migrate -w @crm/api",
+    "db:seed": "npm run db:seed -w @crm/api",
+    "db:reset": "npm run db:reset -w @crm/api"
+  },
+  "keywords": [
+    "crm",
+    "vidrieria",
+    "react",
+    "express",
+    "drizzle"
+  ],
+  "author": "",
+  "license": "UNLICENSED",
+  "type": "module",
+  "devDependencies": {
+    "npm-run-all": "^4.1.5"
+  }
+}
