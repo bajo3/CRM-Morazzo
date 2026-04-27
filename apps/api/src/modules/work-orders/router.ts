@@ -1,4 +1,4 @@
-import { canTransitionWorkOrderStatus, workOrderStatusSchema } from "@crm/shared";
+import { workOrderStatusSchema } from "@crm/shared";
 import { desc, eq, sql } from "drizzle-orm";
 import { Router } from "express";
 import { z } from "zod";
@@ -67,14 +67,6 @@ workOrdersRouter.patch("/:id/status", async (request, response) => {
       return;
     }
 
-    if (current.status !== payload.status && !canTransitionWorkOrderStatus(current.status, payload.status)) {
-      response.status(400).json({
-        ok: false,
-        error: `Invalid transition from ${current.status} to ${payload.status}`,
-      });
-      return;
-    }
-
     const [updated] = await db
       .update(workOrders)
       .set({
@@ -97,14 +89,6 @@ workOrdersRouter.put("/:id", async (request, response) => {
 
     if (!current) {
       response.status(404).json({ ok: false, error: "Work order not found" });
-      return;
-    }
-
-    if (current.status !== payload.status && !canTransitionWorkOrderStatus(current.status, payload.status)) {
-      response.status(400).json({
-        ok: false,
-        error: `Invalid transition from ${current.status} to ${payload.status}`,
-      });
       return;
     }
 

@@ -3,33 +3,34 @@ import { NavLink } from "react-router-dom";
 import { cn } from "../../lib/cn";
 
 const items = [
-  { to: "/", label: "Dashboard", hint: "Resumen" },
+  { to: "/", label: "Tablero", hint: "Hoy" },
   { to: "/clientes", label: "Clientes", hint: "Base" },
   { to: "/presupuestos", label: "Presupuestos", hint: "Ventas" },
-  { to: "/calculadora", label: "Calculadora", hint: "Rapida" },
-  { to: "/ordenes", label: "Ordenes", hint: "Taller" },
-  { to: "/stock", label: "Stock", hint: "Hojas" },
+  { to: "/ordenes", label: "Órdenes", hint: "Taller" },
   { to: "/caja", label: "Caja", hint: "Pagos" },
   { to: "/agenda", label: "Agenda", hint: "Entregas" },
-  { to: "/configuracion", label: "Precios", hint: "Catalogos" },
+  { to: "/stock", label: "Stock", hint: "Hojas" },
+  { to: "/calculadora", label: "Calculadora", hint: "Rápida" },
+  { to: "/configuracion", label: "Precios", hint: "Catálogos" },
 ];
 
 export function Sidebar() {
   return (
-    <aside className="flex w-full flex-col gap-6 border-r border-white/10 bg-[#233235] px-5 py-6 text-stone-50 lg:w-80">
+    <aside className="flex w-full flex-col gap-6 border-r border-white/10 bg-[#233235] px-5 py-6 text-stone-50 lg:w-72">
       <div className="rounded-[28px] border border-white/10 bg-white/5 p-5 shadow-[0_24px_60px_rgba(0,0,0,0.18)] backdrop-blur">
-        <p className="text-[11px] uppercase tracking-[0.26em] text-stone-300">CRM Vidrieria</p>
-        <h1 className="mt-2 text-3xl font-semibold tracking-tight text-white">Facundo Morazzo</h1>
-        <p className="mt-2 text-sm leading-6 text-stone-300">
-          Presupuestos rapidos, seguimiento claro y operacion diaria sin vueltas.
+        <p className="text-[11px] uppercase tracking-[0.26em] text-stone-300">CRM Vidriería</p>
+        <h1 className="mt-2 text-2xl font-semibold tracking-tight text-white">Facundo Morazzo</h1>
+        <p className="mt-1.5 text-xs leading-5 text-stone-400">
+          Presupuestos, órdenes, cobros y agenda en un solo lugar.
         </p>
       </div>
 
-      <nav className="space-y-2">
+      <nav className="space-y-1">
         {items.map((item) => (
           <NavLink
             key={item.to}
             to={item.to}
+            end={item.to === "/"}
             className={({ isActive }) =>
               cn(
                 "flex items-center justify-between rounded-2xl px-4 py-3 text-sm font-medium transition",
@@ -46,8 +47,10 @@ export function Sidebar() {
       </nav>
 
       <div className="mt-auto rounded-[24px] border border-white/10 bg-white/5 p-4 text-sm text-stone-300">
-        <p className="font-semibold text-white">Mostrador del dia</p>
-        <p className="mt-2 leading-6">Usa clientes y presupuestos como puerta de entrada. Ordenes, caja y agenda siguen el flujo.</p>
+        <p className="font-semibold text-white">Flujo de trabajo</p>
+        <p className="mt-1.5 text-xs leading-5 text-stone-400">
+          Cliente → Presupuesto → Orden → Pago → Entrega
+        </p>
       </div>
     </aside>
   );

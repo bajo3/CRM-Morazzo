@@ -73,10 +73,7 @@ clientsRouter.put("/:id", async (request, response) => {
 clientsRouter.delete("/:id", async (request, response) => {
   try {
     const [existing] = await db
-      .select({
-        id: clients.id,
-        name: clients.name,
-      })
+      .select({ id: clients.id, name: clients.name })
       .from(clients)
       .where(and(eq(clients.id, request.params.id), isNull(clients.deletedAt)));
 
@@ -95,40 +92,27 @@ clientsRouter.delete("/:id", async (request, response) => {
       .from(clients)
       .where(eq(clients.id, request.params.id));
 
-    const hasHistory =
-      Number(related?.quotesCount ?? 0) > 0 ||
-      Number(related?.workOrdersCount ?? 0) > 0 ||
-      Number(related?.paymentsCount ?? 0) > 0 ||
-      Number(related?.scheduleCount ?? 0) > 0;
+    const qc = Number(related?.quotesCount ?? 0);
+    const wc = Number(related?.workOrdersCount ?? 0);
+    const pc = Number(related?.paymentsCount ?? 0);
+    const sc = Number(related?.scheduleCount ?? 0);
+    const hasHistory = qc > 0 || wc > 0 || pc > 0 || sc > 0;
 
     if (hasHistory) {
-      const [archived] = await db
-        .update(clients)
-        .set({
-          deletedAt: new Date(),
-          updatedAt: new Date(),
-        })
-        .where(eq(clients.id, request.params.id))
-        .returning();
-
-      response.json({
-        ok: true,
-        data: {
-          mode: "archived",
-          client: archived,
-        },
+      const parts: string[] = [];
+      if (qc > 0) parts.push(`${qc} presupuesto${qc > 1 ? "s" : ""}`);
+      if (wc > 0) parts.push(`${wc} orden${wc > 1 ? "es" : ""}`);
+      if (pc > 0) parts.push(`${pc} pago${pc > 1 ? "s" : ""}`);
+      if (sc > 0) parts.push(`${sc} entrada${sc > 1 ? "s" : ""} de agenda`);
+      response.status(409).json({
+        ok: false,
+        error: `No se puede eliminar: ${existing.name} tiene ${parts.join(", ")}.`,
       });
       return;
     }
 
     const [deleted] = await db.delete(clients).where(eq(clients.id, request.params.id)).returning();
-    response.json({
-      ok: true,
-      data: {
-        mode: "deleted",
-        client: deleted,
-      },
-    });
+    response.json({ ok: true, data: { mode: "deleted", client: deleted } });
   } catch (error) {
     handleRouteError(error, response);
   }

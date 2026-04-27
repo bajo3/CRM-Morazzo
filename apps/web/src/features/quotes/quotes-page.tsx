@@ -11,7 +11,7 @@ import { TopHeader } from "../../components/layout/top-header";
 import { DataTable } from "../../components/ui/data-table";
 import { FormField, TextArea, TextInput } from "../../components/ui/form-field";
 import { StatusBadge } from "../../components/ui/status-badge";
-import { apiFetch, getApiBaseUrl } from "../../lib/api";
+import { ApiError, apiFetch, getApiBaseUrl } from "../../lib/api";
 import { quoteStatusLabels, toSpanishLabel } from "../../lib/labels";
 
 type ApiResponse<T> = {
@@ -131,8 +131,28 @@ function getStatusTone(status: string): "neutral" | "info" | "success" | "warnin
   return "neutral";
 }
 
+const STATUS_FILTERS = [
+  { key: "all", label: "Todos" },
+  { key: "pending", label: "Pendientes" },
+  { key: "approved", label: "Aprobados" },
+  { key: "in_progress", label: "En curso" },
+  { key: "finished", label: "Finalizados" },
+] as const;
+
+type StatusFilterKey = (typeof STATUS_FILTERS)[number]["key"];
+
+function matchesFilter(status: string, filter: StatusFilterKey): boolean {
+  if (filter === "all") return true;
+  if (filter === "pending") return status === "draft" || status === "sent";
+  if (filter === "approved") return status === "approved";
+  if (filter === "in_progress") return status === "in_progress";
+  if (filter === "finished") return status === "finished" || status === "delivered" || status === "paid";
+  return true;
+}
+
 export function QuotesPage() {
   const [quotes, setQuotes] = useState<QuoteRow[]>([]);
+  const [statusFilter, setStatusFilter] = useState<StatusFilterKey>("all");
   const [selectedQuoteId, setSelectedQuoteId] = useState<string | null>(null);
   const [selectedQuote, setSelectedQuote] = useState<QuoteDetail | null>(null);
   const [clients, setClients] = useState<Client[]>([]);
@@ -144,41 +164,33 @@ export function QuotesPage() {
   const [catalogsLoaded, setCatalogsLoaded] = useState(false);
   const [isListLoading, setIsListLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
-  const [feedback, setFeedback] = useState("Cargando presupuestos.");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  const filteredQuotes = useMemo(
+    () => quotes.filter((q) => matchesFilter(q.status, statusFilter)),
+    [quotes, statusFilter],
+  );
+
   useEffect(() => {
-    void loadQuotes();
+    setIsListLoading(true);
+    apiFetch<ApiResponse<QuoteRow[]>>("/quotes")
+      .then((response) => {
+        setQuotes(response.data);
+        setSelectedQuoteId(response.data[0]?.id ?? null);
+      })
+      .catch(() => setErrorMessage("No se pudieron cargar los presupuestos."))
+      .finally(() => setIsListLoading(false));
   }, []);
 
   useEffect(() => {
     if (!selectedQuoteId) {
+      setSelectedQuote(null);
       return;
     }
-
     apiFetch<ApiResponse<QuoteDetail>>(`/quotes/${selectedQuoteId}`)
-      .then((response) => {
-        setSelectedQuote(response.data);
-      })
-      .catch(() => {
-        setSelectedQuote(null);
-      });
+      .then((response) => setSelectedQuote(response.data))
+      .catch(() => setSelectedQuote(null));
   }, [selectedQuoteId]);
-
-  async function loadQuotes(preferredQuoteId?: string | null) {
-    setIsListLoading(true);
-
-    try {
-      const response = await apiFetch<ApiResponse<QuoteRow[]>>("/quotes");
-      setQuotes(response.data);
-      setSelectedQuoteId(preferredQuoteId ?? response.data[0]?.id ?? null);
-      setFeedback(response.data.length > 0 ? "Presupuestos listos para cotizar y aprobar." : "Todavía no hay presupuestos.");
-    } catch {
-      setFeedback("No se pudieron cargar los presupuestos.");
-    } finally {
-      setIsListLoading(false);
-    }
-  }
 
   async function ensureCatalogs() {
     if (catalogsLoaded) {
@@ -373,8 +385,24 @@ export function QuotesPage() {
         body: JSON.stringify(parsed.data),
       });
 
-      await loadQuotes(response.data.id);
-      setFeedback(editingQuoteId ? "Presupuesto actualizado." : "Presupuesto creado.");
+      const saved = response.data;
+      const savedRow: QuoteRow = {
+        id: saved.id,
+        quoteNumber: saved.quoteNumber,
+        clientId: saved.clientId,
+        status: saved.status,
+        issueDate: saved.issueDate,
+        totalCents: saved.totalCents,
+        clientName: saved.clientName,
+      };
+
+      if (editingQuoteId) {
+        setQuotes((current) => current.map((q) => (q.id === saved.id ? savedRow : q)));
+      } else {
+        setQuotes((current) => [savedRow, ...current]);
+      }
+      setSelectedQuote(saved);
+      setSelectedQuoteId(saved.id);
       setShowForm(false);
       setEditingQuoteId(null);
     } catch {
@@ -386,30 +414,34 @@ export function QuotesPage() {
 
   async function handleApprove(quoteId: string) {
     try {
-      await apiFetch(`/quotes/${quoteId}/approve`, {
-        method: "POST",
-      });
-      await loadQuotes(quoteId);
-      setFeedback("Presupuesto aprobado y orden de trabajo creada.");
+      await apiFetch(`/quotes/${quoteId}/approve`, { method: "POST" });
+      // Optimistic: update status in list
+      setQuotes((current) => current.map((q) => (q.id === quoteId ? { ...q, status: "approved" } : q)));
+      // Reload detail only (not the full list)
+      const detail = await apiFetch<ApiResponse<QuoteDetail>>(`/quotes/${quoteId}`);
+      setSelectedQuote(detail.data);
     } catch {
-      setFeedback("No se pudo aprobar el presupuesto.");
+      setErrorMessage("No se pudo aprobar el presupuesto.");
     }
   }
 
   async function handleDelete(quote: QuoteRow) {
-    const confirmed = window.confirm(`¿Querés eliminar el presupuesto ${quote.quoteNumber}?`);
-    if (!confirmed) {
-      return;
-    }
+    const confirmed = window.confirm(`¿Eliminar el presupuesto ${quote.quoteNumber}?`);
+    if (!confirmed) return;
 
     try {
-      await apiFetch(`/quotes/${quote.id}`, {
-        method: "DELETE",
-      });
-      await loadQuotes(selectedQuoteId === quote.id ? null : selectedQuoteId);
-      setFeedback("Presupuesto eliminado.");
-    } catch {
-      setFeedback("No se pudo eliminar. Si ya tiene pagos u orden, queda bloqueado.");
+      await apiFetch(`/quotes/${quote.id}`, { method: "DELETE" });
+      setQuotes((current) => current.filter((q) => q.id !== quote.id));
+      if (selectedQuoteId === quote.id) {
+        setSelectedQuoteId(null);
+        setSelectedQuote(null);
+      }
+    } catch (error) {
+      if (error instanceof ApiError) {
+        setErrorMessage(error.message);
+      } else {
+        setErrorMessage("No se pudo eliminar. Si tiene pagos u orden, queda bloqueado.");
+      }
     }
   }
 
@@ -425,7 +457,30 @@ export function QuotesPage() {
         }
       />
 
-      <div className="rounded-2xl border border-line bg-white p-4 text-sm text-stone-600 shadow-panel">{feedback}</div>
+      {/* Filtro por estado */}
+      <div className="flex flex-wrap items-center gap-2">
+        {STATUS_FILTERS.map((filter) => {
+          const count = filter.key === "all" ? quotes.length : quotes.filter((q) => matchesFilter(q.status, filter.key)).length;
+          const isActive = statusFilter === filter.key;
+          return (
+            <button
+              key={filter.key}
+              type="button"
+              onClick={() => setStatusFilter(filter.key)}
+              className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
+                isActive
+                  ? "bg-[#233235] text-white shadow-sm"
+                  : "border border-line bg-white text-stone-600 hover:border-stone-300"
+              }`}
+            >
+              {filter.label}
+              <span className={`ml-2 text-xs ${isActive ? "text-stone-300" : "text-stone-400"}`}>
+                {count}
+              </span>
+            </button>
+          );
+        })}
+      </div>
 
       <section className="grid gap-6 xl:grid-cols-[1.1fr,0.9fr]">
         <div className="space-y-3">
@@ -437,7 +492,7 @@ export function QuotesPage() {
                   key: "quoteNumber",
                   header: "Número",
                   render: (row) => (
-                    <button type="button" onClick={() => setSelectedQuoteId(row.id)} className="text-left font-semibold text-ink">
+                    <button type="button" onClick={() => setSelectedQuoteId(row.id)} className="text-left font-semibold text-ink hover:text-accent">
                       {row.quoteNumber}
                     </button>
                   ),
@@ -459,9 +514,9 @@ export function QuotesPage() {
                   ),
                 },
               ]}
-              rows={quotes}
-              emptyTitle="Sin presupuestos"
-              emptyDescription="Creá el primero y validá el flujo comercial."
+              rows={filteredQuotes}
+              emptyTitle={statusFilter !== "all" ? "Sin presupuestos en este estado" : "Sin presupuestos"}
+              emptyDescription={statusFilter !== "all" ? "Cambiá el filtro para ver otros." : "Creá el primero y validá el flujo comercial."}
             />
           ) : null}
         </div>
@@ -616,7 +671,7 @@ export function QuotesPage() {
                     <FormField label="Cantidad">
                       <TextInput value={item.quantity} onChange={(event) => updateItem(index, "quantity", event.target.value)} />
                     </FormField>
-                    <FormField label="Precio por m2 (centavos)">
+                    <FormField label="Precio por m2 ($)">
                       <TextInput value={item.pricePerM2Cents} onChange={(event) => updateItem(index, "pricePerM2Cents", event.target.value)} />
                     </FormField>
                   </div>

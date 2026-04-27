@@ -162,13 +162,19 @@ export function CashPage() {
       return;
     }
 
+    const amount = Math.round(Number(paymentForm.amountCents));
+    if (!amount || amount <= 0) {
+      setFeedback("El monto debe ser mayor a $0.");
+      return;
+    }
+
     try {
       await apiFetch(editingPaymentId ? `/payments/${editingPaymentId}` : "/payments", {
         method: editingPaymentId ? "PUT" : "POST",
         body: JSON.stringify({
           clientId: selectedQuote.clientId,
           quoteId: selectedQuote.id,
-          amountCents: Number(paymentForm.amountCents),
+          amountCents: amount,
           paymentMethod: paymentForm.paymentMethod,
           notes: paymentForm.notes || null,
         }),
@@ -178,21 +184,32 @@ export function CashPage() {
       setShowPaymentForm(false);
       setFeedback(editingPaymentId ? "Pago actualizado." : "Pago registrado.");
     } catch {
-      setFeedback("No se pudo guardar el pago.");
+      setFeedback("No se pudo guardar el pago. Revisá que el monto sea válido.");
     }
   }
 
   async function handleMovementSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
+    if (movementForm.concept.trim().length < 2) {
+      setFeedback("El concepto debe tener al menos 2 caracteres.");
+      return;
+    }
+
+    const amount = Math.round(Number(movementForm.amountCents));
+    if (!amount || amount <= 0) {
+      setFeedback("El monto debe ser mayor a $0.");
+      return;
+    }
+
     try {
       await apiFetch(editingMovementId ? `/cash/movements/${editingMovementId}` : "/cash/movements", {
         method: editingMovementId ? "PUT" : "POST",
         body: JSON.stringify({
           type: movementForm.type,
-          concept: movementForm.concept,
+          concept: movementForm.concept.trim(),
           category: movementForm.category,
-          amountCents: Number(movementForm.amountCents),
+          amountCents: amount,
           movementDate: movementForm.movementDate ? new Date(movementForm.movementDate).toISOString() : null,
           notes: movementForm.notes || null,
         }),
@@ -200,9 +217,9 @@ export function CashPage() {
 
       await loadData();
       setShowMovementForm(false);
-      setFeedback(editingMovementId ? "Movimiento de caja actualizado." : "Movimiento de caja registrado.");
+      setFeedback(editingMovementId ? "Movimiento actualizado." : "Movimiento registrado correctamente.");
     } catch {
-      setFeedback("No se pudo guardar el movimiento.");
+      setFeedback("No se pudo guardar el movimiento. Revisá concepto y monto.");
     }
   }
 

@@ -1,10 +1,11 @@
 import { createClientSchema, type Client } from "@crm/shared";
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 
 import { TopHeader } from "../../components/layout/top-header";
 import { DataTable } from "../../components/ui/data-table";
 import { FormField, TextArea, TextInput } from "../../components/ui/form-field";
-import { apiFetch } from "../../lib/api";
+import { ApiError, apiFetch } from "../../lib/api";
 
 type ApiResponse<T> = {
   ok: boolean;
@@ -22,49 +23,56 @@ const initialForm = {
 export function ClientsPage() {
   const [clients, setClients] = useState<Client[]>([]);
   const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
   const [form, setForm] = useState(initialForm);
   const [editingClientId, setEditingClientId] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [feedback, setFeedback] = useState("Cargando clientes.");
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [feedbackTone, setFeedbackTone] = useState<"neutral" | "error">("neutral");
+  const [formError, setFormError] = useState<string | null>(null);
+
+  const filteredClients = useMemo(() => {
+    const q = searchQuery.toLowerCase().trim();
+    if (!q) return clients;
+    return clients.filter(
+      (client) =>
+        client.name.toLowerCase().includes(q) ||
+        (client.phone ?? "").toLowerCase().includes(q) ||
+        (client.jobSite ?? "").toLowerCase().includes(q),
+    );
+  }, [clients, searchQuery]);
 
   const selectedClient = useMemo(
-    () => clients.find((client) => client.id === selectedClientId) ?? clients[0] ?? null,
+    () => clients.find((client) => client.id === selectedClientId) ?? null,
     [clients, selectedClientId],
   );
 
   useEffect(() => {
-    void loadClients();
+    setIsLoading(true);
+    apiFetch<ApiResponse<Client[]>>("/clients")
+      .then((response) => {
+        setClients(response.data);
+        setSelectedClientId(response.data[0]?.id ?? null);
+        setFeedback(response.data.length > 0 ? `${response.data.length} clientes.` : "Sin clientes todavía.");
+        setFeedbackTone("neutral");
+      })
+      .catch(() => {
+        setFeedback("No se pudieron cargar los clientes.");
+        setFeedbackTone("error");
+      })
+      .finally(() => setIsLoading(false));
   }, []);
 
-  async function loadClients(preferredId?: string | null) {
-    setIsLoading(true);
-
-    try {
-      const response = await apiFetch<ApiResponse<Client[]>>("/clients");
-      setClients(response.data);
-      setSelectedClientId(preferredId ?? response.data[0]?.id ?? null);
-      setFeedback(response.data.length > 0 ? "Clientes listos para operar." : "Todavía no hay clientes cargados.");
-    } catch {
-      setFeedback("No se pudieron cargar los clientes.");
-    } finally {
-      setIsLoading(false);
-    }
-  }
-
   function updateField(field: keyof typeof initialForm, value: string) {
-    setForm((current) => ({
-      ...current,
-      [field]: value,
-    }));
+    setForm((current) => ({ ...current, [field]: value }));
   }
 
   function openCreateForm() {
     setEditingClientId(null);
     setForm(initialForm);
-    setErrorMessage(null);
+    setFormError(null);
     setShowForm(true);
   }
 
@@ -77,13 +85,13 @@ export function ClientsPage() {
       jobSite: client.jobSite ?? "",
       notes: client.notes ?? "",
     });
-    setErrorMessage(null);
+    setFormError(null);
     setShowForm(true);
   }
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setErrorMessage(null);
+    setFormError(null);
 
     const parsed = createClientSchema.safeParse({
       name: form.name,
@@ -94,50 +102,61 @@ export function ClientsPage() {
     });
 
     if (!parsed.success) {
-      setErrorMessage("Revisá nombre, teléfono y observaciones antes de guardar.");
+      setFormError("El nombre es obligatorio.");
       return;
     }
 
     setIsSaving(true);
 
     try {
-      const path = editingClientId ? `/clients/${editingClientId}` : "/clients";
-      const method = editingClientId ? "PUT" : "POST";
-      const response = await apiFetch<ApiResponse<Client>>(path, {
-        method,
-        body: JSON.stringify(parsed.data),
-      });
-
-      await loadClients(response.data.id);
-      setFeedback(editingClientId ? "Cliente actualizado." : "Cliente creado.");
+      if (editingClientId) {
+        const response = await apiFetch<ApiResponse<Client>>(`/clients/${editingClientId}`, {
+          method: "PUT",
+          body: JSON.stringify(parsed.data),
+        });
+        setClients((current) => current.map((c) => (c.id === response.data.id ? response.data : c)));
+        setSelectedClientId(response.data.id);
+        setFeedback("Cliente actualizado.");
+      } else {
+        const response = await apiFetch<ApiResponse<Client>>("/clients", {
+          method: "POST",
+          body: JSON.stringify(parsed.data),
+        });
+        setClients((current) =>
+          [...current, response.data].sort((a, b) => a.name.localeCompare(b.name, "es-AR")),
+        );
+        setSelectedClientId(response.data.id);
+        setFeedback("Cliente creado.");
+      }
+      setFeedbackTone("neutral");
       setShowForm(false);
       setEditingClientId(null);
     } catch {
-      setErrorMessage("No se pudo guardar el cliente.");
+      setFormError("No se pudo guardar el cliente. Revisá los datos.");
     } finally {
       setIsSaving(false);
     }
   }
 
   async function handleDelete(client: Client) {
-    const confirmed = window.confirm(`¿Querés eliminar a ${client.name}?`);
-    if (!confirmed) {
-      return;
-    }
+    const confirmed = window.confirm(
+      `¿Eliminar a ${client.name}?\n\nSi tiene presupuestos, pagos u órdenes, el sistema va a bloquear el borrado con un mensaje claro. Si no tiene historial, se elimina definitivamente.`,
+    );
+    if (!confirmed) return;
 
     try {
-      const response = await apiFetch<ApiResponse<{ mode: string }>>(`/clients/${client.id}`, {
-        method: "DELETE",
-      });
-
-      await loadClients(selectedClientId === client.id ? null : selectedClientId);
-      setFeedback(
-        response.data.mode === "archived"
-          ? "El cliente se ocultó porque ya tenía historial."
-          : "Cliente eliminado.",
-      );
-    } catch {
-      setFeedback("No se pudo eliminar el cliente.");
+      await apiFetch(`/clients/${client.id}`, { method: "DELETE" });
+      setClients((current) => current.filter((c) => c.id !== client.id));
+      if (selectedClientId === client.id) setSelectedClientId(null);
+      setFeedback("Cliente eliminado.");
+      setFeedbackTone("neutral");
+    } catch (error) {
+      if (error instanceof ApiError) {
+        setFeedback(error.message);
+      } else {
+        setFeedback("No se pudo eliminar el cliente.");
+      }
+      setFeedbackTone("error");
     }
   }
 
@@ -145,7 +164,7 @@ export function ClientsPage() {
     <div className="space-y-6">
       <TopHeader
         title="Clientes"
-        description="Alta, edición y baja rápida para mostrador, obras y seguimiento comercial."
+        description="Base de clientes para arrancar el flujo desde el mostrador."
         action={
           <button
             type="button"
@@ -159,7 +178,35 @@ export function ClientsPage() {
 
       <section className="grid gap-4 lg:grid-cols-[1.2fr,0.8fr]">
         <div className="space-y-3">
-          <div className="rounded-2xl border border-line bg-white px-4 py-3 text-sm text-stone-600 shadow-panel">{feedback}</div>
+          <div className="flex items-center gap-3">
+            <input
+              type="search"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Buscar por nombre, teléfono u obra…"
+              className="flex-1 rounded-xl border border-line bg-white px-4 py-2.5 text-sm text-ink outline-none transition placeholder:text-stone-400 focus:border-accent focus:ring-2 focus:ring-accent/20"
+            />
+            {searchQuery ? (
+              <button
+                type="button"
+                onClick={() => setSearchQuery("")}
+                className="rounded-xl border border-line px-3 py-2.5 text-sm font-semibold text-stone-600"
+              >
+                Limpiar
+              </button>
+            ) : null}
+          </div>
+
+          <div
+            className={`rounded-2xl border px-4 py-2.5 text-sm shadow-panel ${
+              feedbackTone === "error"
+                ? "border-rose-200 bg-rose-50 font-medium text-rose-700"
+                : "border-line bg-white text-stone-600"
+            }`}
+          >
+            {isLoading ? "Cargando..." : searchQuery ? `${filteredClients.length} resultado/s` : feedback}
+          </div>
+
           {isLoading ? <LoadingRows /> : null}
           {!isLoading ? (
             <DataTable
@@ -168,7 +215,11 @@ export function ClientsPage() {
                   key: "name",
                   header: "Cliente",
                   render: (row) => (
-                    <button type="button" onClick={() => setSelectedClientId(row.id)} className="text-left font-semibold text-ink">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedClientId(row.id)}
+                      className={`text-left font-semibold transition ${selectedClientId === row.id ? "text-accent" : "text-ink hover:text-accent"}`}
+                    >
                       {row.name}
                     </button>
                   ),
@@ -177,68 +228,112 @@ export function ClientsPage() {
                 { key: "jobSite", header: "Obra / zona", render: (row) => row.jobSite ?? "-" },
                 {
                   key: "actions",
-                  header: "Acciones",
+                  header: "",
                   render: (row) => (
                     <div className="flex gap-2">
-                      <button type="button" onClick={() => openEditForm(row)} className="rounded-lg border border-line px-3 py-1.5 text-xs font-semibold text-stone-700">
+                      <button
+                        type="button"
+                        onClick={() => openEditForm(row)}
+                        className="rounded-lg border border-line px-3 py-1.5 text-xs font-semibold text-stone-700 transition hover:border-stone-300 hover:bg-stone-50"
+                      >
                         Editar
                       </button>
-                      <button type="button" onClick={() => void handleDelete(row)} className="rounded-lg border border-rose-200 px-3 py-1.5 text-xs font-semibold text-rose-700">
+                      <button
+                        type="button"
+                        onClick={() => void handleDelete(row)}
+                        className="rounded-lg bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 transition hover:bg-rose-100"
+                      >
                         Eliminar
                       </button>
                     </div>
                   ),
                 },
               ]}
-              rows={clients}
-              emptyTitle="Sin clientes"
-              emptyDescription="Creá el primer cliente para arrancar el flujo."
+              rows={filteredClients}
+              emptyTitle={searchQuery ? "Sin resultados" : "Sin clientes"}
+              emptyDescription={
+                searchQuery ? "Probá con otro nombre o teléfono." : "Creá el primer cliente para arrancar el flujo."
+              }
             />
           ) : null}
         </div>
 
-        <section className="rounded-[28px] border border-white/60 bg-white/80 p-5 shadow-[0_20px_45px_rgba(92,74,46,0.08)] backdrop-blur">
+        <aside className="rounded-[28px] border border-white/60 bg-white/80 p-5 shadow-[0_20px_45px_rgba(92,74,46,0.08)] backdrop-blur">
           {selectedClient ? (
-            <div className="space-y-5">
+            <div className="space-y-4">
               <div className="flex items-start justify-between gap-4">
                 <div>
-                  <p className="text-xs uppercase tracking-[0.18em] text-stone-500">Ficha rápida</p>
-                  <h3 className="mt-1 text-2xl font-semibold text-ink">{selectedClient.name}</h3>
-                  <p className="mt-2 text-sm text-stone-600">Datos simples para vender, cobrar y coordinar.</p>
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-stone-400">Ficha</p>
+                  <h3 className="mt-1 text-xl font-semibold text-ink">{selectedClient.name}</h3>
                 </div>
-                <button type="button" onClick={() => openEditForm(selectedClient)} className="rounded-xl border border-line px-3 py-2 text-sm font-semibold text-stone-700">
+                <button
+                  type="button"
+                  onClick={() => openEditForm(selectedClient)}
+                  className="rounded-xl border border-line px-3 py-2 text-sm font-semibold text-stone-700 transition hover:border-stone-300 hover:bg-stone-50"
+                >
                   Editar
                 </button>
               </div>
 
-              <InfoCard label="Teléfono" value={selectedClient.phone ?? "-"} />
-              <InfoCard label="Dirección" value={selectedClient.address ?? "-"} />
-              <InfoCard label="Obra / zona" value={selectedClient.jobSite ?? "-"} />
-              <InfoCard label="Observaciones" value={selectedClient.notes ?? "-"} multiline />
+              <div className="space-y-2">
+                <InfoRow label="Teléfono" value={selectedClient.phone ?? "-"} />
+                <InfoRow label="Dirección" value={selectedClient.address ?? "-"} />
+                <InfoRow label="Obra / zona" value={selectedClient.jobSite ?? "-"} />
+                {selectedClient.notes ? <InfoRow label="Notas" value={selectedClient.notes} multiline /> : null}
+              </div>
+
+              <div className="border-t border-stone-100 pt-4">
+                <p className="mb-3 text-xs font-semibold uppercase tracking-[0.14em] text-stone-400">Acciones rápidas</p>
+                <div className="space-y-2">
+                  <Link
+                    to="/presupuestos"
+                    className="flex w-full items-center justify-center rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white transition hover:opacity-90"
+                  >
+                    Nuevo presupuesto
+                  </Link>
+                  <Link
+                    to="/agenda"
+                    className="flex w-full items-center justify-center rounded-xl border border-line px-4 py-2.5 text-sm font-semibold text-stone-700 transition hover:border-stone-300 hover:bg-stone-50"
+                  >
+                    Agendar visita / entrega
+                  </Link>
+                </div>
+              </div>
             </div>
           ) : (
-            <div className="rounded-2xl border border-dashed border-line p-10 text-center text-sm text-stone-600">
-              Seleccioná un cliente para ver la ficha rápida.
+            <div className="flex h-full min-h-[180px] items-center justify-center">
+              <p className="text-sm text-stone-400">Seleccioná un cliente para ver la ficha.</p>
             </div>
           )}
-        </section>
+        </aside>
       </section>
 
       {showForm ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#1c2526]/50 p-4 backdrop-blur-sm">
-          <form onSubmit={handleSubmit} className="w-full max-w-xl rounded-[32px] border border-white/70 bg-[#fcfbf8] p-6 shadow-[0_30px_80px_rgba(31,37,33,0.24)]">
+          <form
+            onSubmit={handleSubmit}
+            className="w-full max-w-xl rounded-[32px] border border-white/70 bg-[#fcfbf8] p-6 shadow-[0_30px_80px_rgba(31,37,33,0.24)]"
+          >
             <div className="flex items-start justify-between gap-4">
               <div>
-                <p className="text-xs uppercase tracking-[0.18em] text-stone-500">{editingClientId ? "Edición" : "Alta rápida"}</p>
-                <h3 className="mt-1 text-2xl font-semibold text-ink">{editingClientId ? "Editar cliente" : "Nuevo cliente"}</h3>
+                <p className="text-xs uppercase tracking-[0.18em] text-stone-500">
+                  {editingClientId ? "Edición" : "Alta rápida"}
+                </p>
+                <h3 className="mt-1 text-2xl font-semibold text-ink">
+                  {editingClientId ? "Editar cliente" : "Nuevo cliente"}
+                </h3>
               </div>
-              <button type="button" onClick={() => setShowForm(false)} className="rounded-full bg-stone-200 px-3 py-1 text-sm font-semibold text-stone-700">
+              <button
+                type="button"
+                onClick={() => setShowForm(false)}
+                className="rounded-full bg-stone-200 px-3 py-1 text-sm font-semibold text-stone-700"
+              >
                 Cerrar
               </button>
             </div>
 
             <div className="mt-6 space-y-4">
-              <FormField label="Nombre">
+              <FormField label="Nombre *">
                 <TextInput value={form.name} onChange={(event) => updateField("name", event.target.value)} />
               </FormField>
               <div className="grid gap-4 md:grid-cols-2">
@@ -255,9 +350,15 @@ export function ClientsPage() {
               <FormField label="Observaciones">
                 <TextArea value={form.notes} onChange={(event) => updateField("notes", event.target.value)} />
               </FormField>
-              {errorMessage ? <p className="text-sm font-medium text-rose-700">{errorMessage}</p> : null}
+
+              {formError ? <p className="text-sm font-medium text-rose-700">{formError}</p> : null}
+
               <div className="flex justify-end gap-3">
-                <button type="button" onClick={() => setShowForm(false)} className="rounded-xl border border-line px-4 py-2.5 text-sm font-semibold text-stone-700">
+                <button
+                  type="button"
+                  onClick={() => setShowForm(false)}
+                  className="rounded-xl border border-line px-4 py-2.5 text-sm font-semibold text-stone-700"
+                >
                   Cancelar
                 </button>
                 <button
@@ -265,7 +366,7 @@ export function ClientsPage() {
                   disabled={isSaving}
                   className="rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {isSaving ? "Guardando..." : editingClientId ? "Guardar cambios" : "Guardar cliente"}
+                  {isSaving ? "Guardando…" : editingClientId ? "Guardar cambios" : "Crear cliente"}
                 </button>
               </div>
             </div>
@@ -279,18 +380,26 @@ export function ClientsPage() {
 function LoadingRows() {
   return (
     <div className="space-y-3 rounded-2xl border border-line bg-white p-4 shadow-panel">
-      {Array.from({ length: 4 }).map((_, index) => (
-        <div key={index} className="h-12 animate-pulse rounded-xl bg-stone-100" />
+      {Array.from({ length: 5 }).map((_, index) => (
+        <div key={index} className="h-11 animate-pulse rounded-xl bg-stone-100" />
       ))}
     </div>
   );
 }
 
-function InfoCard({ label, value, multiline = false }: { label: string; value: string; multiline?: boolean }) {
+function InfoRow({
+  label,
+  value,
+  multiline = false,
+}: {
+  label: string;
+  value: string;
+  multiline?: boolean;
+}) {
   return (
-    <div className="rounded-2xl border border-stone-200 bg-stone-50 px-4 py-3">
-      <p className="text-xs uppercase tracking-[0.16em] text-stone-500">{label}</p>
-      <p className={`mt-2 text-sm text-ink ${multiline ? "leading-6" : ""}`}>{value}</p>
+    <div className="flex gap-3 rounded-xl bg-stone-50 px-4 py-2.5">
+      <span className="w-20 shrink-0 text-xs font-semibold uppercase tracking-[0.14em] text-stone-400">{label}</span>
+      <span className={`text-sm text-ink ${multiline ? "leading-6" : ""}`}>{value}</span>
     </div>
   );
 }
