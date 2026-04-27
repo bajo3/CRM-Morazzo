@@ -4,7 +4,10 @@
       "Bash(npm run *)",
       "Bash(npm install *)",
       "Bash(npx tsc *)",
-      "Bash(git add *)"
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(echo \"exit: $?\")",
+      "Bash(git check-ignore *)"
     ]
   }
 }
