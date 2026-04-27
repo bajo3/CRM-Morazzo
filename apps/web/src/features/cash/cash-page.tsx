@@ -1,26 +1,15 @@
 import { formatCurrencyFromCents, paymentMethods } from "@crm/shared";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import { TopHeader } from "../../components/layout/top-header";
 import { DataTable } from "../../components/ui/data-table";
 import { FormField, TextArea, TextInput } from "../../components/ui/form-field";
+import { CardSkeleton, TableSkeleton } from "../../components/ui/skeleton";
 import { StatusBadge } from "../../components/ui/status-badge";
 import { apiFetch } from "../../lib/api";
 import { cashCategoryLabels, paymentMethodLabels, toSpanishLabel } from "../../lib/labels";
-
-type ApiResponse<T> = {
-  ok: boolean;
-  data: T;
-};
-
-type QuoteRow = {
-  id: string;
-  quoteNumber: string;
-  clientId: string;
-  clientName: string;
-  status: string;
-  totalCents: number;
-};
+import { queryClient } from "../../lib/query-client";
+import { queryKeys, useCashMovements, useCashSummary, usePayments, useQuotes } from "../../lib/queries";
 
 type PaymentRow = {
   id: string;
@@ -50,13 +39,6 @@ type CashMovementRow = {
   isEditable?: boolean;
 };
 
-type CashSummary = {
-  incomeCents: number;
-  expenseCents: number;
-  balanceCents: number;
-  recent: CashMovementRow[];
-};
-
 const initialPaymentForm = {
   quoteId: "",
   amountCents: "",
@@ -74,44 +56,29 @@ const initialMovementForm = {
 };
 
 export function CashPage() {
-  const [quotes, setQuotes] = useState<QuoteRow[]>([]);
-  const [payments, setPayments] = useState<PaymentRow[]>([]);
-  const [summary, setSummary] = useState<CashSummary | null>(null);
-  const [manualMovements, setManualMovements] = useState<CashMovementRow[]>([]);
+  const { data: allQuotes = [], isLoading: quotesLoading } = useQuotes();
+  const { data: payments = [], isLoading: paymentsLoading } = usePayments();
+  const { data: summary = null, isLoading: summaryLoading } = useCashSummary();
+  const { data: allMovements = [], isLoading: movementsLoading } = useCashMovements();
+
+  const isLoading = quotesLoading || paymentsLoading || summaryLoading || movementsLoading;
+  const quotes = allQuotes.filter((q) => q.status !== "rejected");
+  const manualMovements = allMovements.filter((m) => m.isEditable);
+
   const [paymentForm, setPaymentForm] = useState(initialPaymentForm);
   const [movementForm, setMovementForm] = useState(initialMovementForm);
   const [editingPaymentId, setEditingPaymentId] = useState<string | null>(null);
   const [editingMovementId, setEditingMovementId] = useState<string | null>(null);
   const [showPaymentForm, setShowPaymentForm] = useState(false);
   const [showMovementForm, setShowMovementForm] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
-  const [feedback, setFeedback] = useState("Cargando caja.");
+  const [feedback, setFeedback] = useState("");
 
-  useEffect(() => {
-    void loadData();
-  }, []);
-
-  async function loadData() {
-    setIsLoading(true);
-
-    try {
-      const [quotesResponse, paymentsResponse, summaryResponse, movementsResponse] = await Promise.all([
-        apiFetch<ApiResponse<QuoteRow[]>>("/quotes"),
-        apiFetch<ApiResponse<PaymentRow[]>>("/payments"),
-        apiFetch<ApiResponse<CashSummary>>("/cash/summary"),
-        apiFetch<ApiResponse<CashMovementRow[]>>("/cash/movements"),
-      ]);
-
-      setQuotes(quotesResponse.data.filter((quote) => quote.status !== "rejected"));
-      setPayments(paymentsResponse.data);
-      setSummary(summaryResponse.data);
-      setManualMovements(movementsResponse.data.filter((movement) => movement.isEditable));
-      setFeedback("Caja lista para operar.");
-    } catch {
-      setFeedback("No se pudo cargar la caja.");
-    } finally {
-      setIsLoading(false);
-    }
+  async function invalidateCash() {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.cashSummary }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.cashMovements }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.payments }),
+    ]);
   }
 
   function openPaymentForm(payment?: PaymentRow) {
@@ -180,7 +147,7 @@ export function CashPage() {
         }),
       });
 
-      await loadData();
+      await invalidateCash();
       setShowPaymentForm(false);
       setFeedback(editingPaymentId ? "Pago actualizado." : "Pago registrado.");
     } catch {
@@ -215,7 +182,7 @@ export function CashPage() {
         }),
       });
 
-      await loadData();
+      await invalidateCash();
       setShowMovementForm(false);
       setFeedback(editingMovementId ? "Movimiento actualizado." : "Movimiento registrado correctamente.");
     } catch {
@@ -225,15 +192,11 @@ export function CashPage() {
 
   async function handleDeletePayment(payment: PaymentRow) {
     const confirmed = window.confirm(`¿Querés eliminar el pago ${payment.quoteNumber ?? ""}?`);
-    if (!confirmed) {
-      return;
-    }
+    if (!confirmed) return;
 
     try {
-      await apiFetch(`/payments/${payment.id}`, {
-        method: "DELETE",
-      });
-      await loadData();
+      await apiFetch(`/payments/${payment.id}`, { method: "DELETE" });
+      await invalidateCash();
       setFeedback("Pago eliminado.");
     } catch {
       setFeedback("No se pudo eliminar el pago.");
@@ -242,15 +205,11 @@ export function CashPage() {
 
   async function handleDeleteMovement(movement: CashMovementRow) {
     const confirmed = window.confirm(`¿Querés eliminar el movimiento "${movement.concept}"?`);
-    if (!confirmed) {
-      return;
-    }
+    if (!confirmed) return;
 
     try {
-      await apiFetch(`/cash/movements/${movement.id}`, {
-        method: "DELETE",
-      });
-      await loadData();
+      await apiFetch(`/cash/movements/${movement.id}`, { method: "DELETE" });
+      await invalidateCash();
       setFeedback("Movimiento eliminado.");
     } catch {
       setFeedback("No se pudo eliminar el movimiento.");
@@ -278,10 +237,17 @@ export function CashPage() {
         <MetricCard label="Saldo actual" value={formatCurrencyFromCents(summary?.balanceCents ?? 0)} />
         <MetricCard label="Ingresos" value={formatCurrencyFromCents(summary?.incomeCents ?? 0)} />
         <MetricCard label="Egresos" value={formatCurrencyFromCents(summary?.expenseCents ?? 0)} />
-        <div className="rounded-2xl border border-line bg-white p-5 text-sm text-stone-600 shadow-panel">{feedback}</div>
+        <div className="rounded-2xl border border-line bg-white p-5 text-sm text-stone-600 shadow-panel">
+          {isLoading ? "Cargando caja…" : feedback || "Caja lista para operar."}
+        </div>
       </section>
 
-      {isLoading ? <LoadingRows /> : null}
+      {isLoading ? (
+        <div className="space-y-4">
+          <CardSkeleton lines={3} />
+          <TableSkeleton rows={5} cols={6} />
+        </div>
+      ) : null}
       {!isLoading ? (
         <section className="space-y-6">
           <DataTable
@@ -501,12 +467,3 @@ function MetricCard({ label, value }: { label: string; value: string }) {
   );
 }
 
-function LoadingRows() {
-  return (
-    <div className="space-y-3 rounded-2xl border border-line bg-white p-4 shadow-panel">
-      {Array.from({ length: 4 }).map((_, index) => (
-        <div key={index} className="h-12 animate-pulse rounded-xl bg-stone-100" />
-      ))}
-    </div>
-  );
-}

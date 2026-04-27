@@ -1,47 +1,10 @@
 import { formatCurrencyFromCents } from "@crm/shared";
-import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { TopHeader } from "../../components/layout/top-header";
 import { StatusBadge } from "../../components/ui/status-badge";
-import { apiFetch } from "../../lib/api";
-
-type ApiResponse<T> = {
-  ok: boolean;
-  data: T;
-};
-
-type DashboardSummary = {
-  pendingQuotes: number;
-  approvedQuotes: number;
-  pendingOrders: number;
-  readyOrders: number;
-  overdueOrders: number;
-  pendingPaymentsCents: number;
-  lowStockCount: number;
-  todayCashCents: number;
-  upcoming: Array<{
-    id: string;
-    scheduledDate: string;
-    timeLabel: string | null;
-    address: string;
-    jobType: string;
-    status: string;
-    clientName: string | null;
-  }>;
-};
-
-const fallbackSummary: DashboardSummary = {
-  pendingQuotes: 0,
-  approvedQuotes: 0,
-  pendingOrders: 0,
-  readyOrders: 0,
-  overdueOrders: 0,
-  pendingPaymentsCents: 0,
-  lowStockCount: 0,
-  todayCashCents: 0,
-  upcoming: [],
-};
+import { StatCardSkeleton } from "../../components/ui/skeleton";
+import { useDashboardSummary } from "../../lib/queries";
 
 function scheduleStatusTone(status: string): "neutral" | "info" | "success" | "warning" | "danger" {
   if (status === "completed") return "success";
@@ -60,30 +23,28 @@ function scheduleStatusLabel(status: string) {
   return labels[status] ?? status;
 }
 
+const fallbackSummary = {
+  pendingQuotes: 0,
+  approvedQuotes: 0,
+  pendingOrders: 0,
+  readyOrders: 0,
+  overdueOrders: 0,
+  pendingPaymentsCents: 0,
+  lowStockCount: 0,
+  todayCashCents: 0,
+  upcoming: [] as Array<{
+    id: string;
+    scheduledDate: string;
+    timeLabel: string | null;
+    address: string;
+    jobType: string;
+    status: string;
+    clientName: string | null;
+  }>,
+};
+
 export function DashboardPage() {
-  const [summary, setSummary] = useState<DashboardSummary>(fallbackSummary);
-  const [isLoading, setIsLoading] = useState(true);
-  const [loadError, setLoadError] = useState(false);
-
-  useEffect(() => {
-    let isMounted = true;
-
-    apiFetch<ApiResponse<DashboardSummary>>("/dashboard/summary")
-      .then((response) => {
-        if (!isMounted) return;
-        setSummary(response.data);
-        setIsLoading(false);
-      })
-      .catch(() => {
-        if (!isMounted) return;
-        setLoadError(true);
-        setIsLoading(false);
-      });
-
-    return () => {
-      isMounted = false;
-    };
-  }, []);
+  const { data: summary = fallbackSummary, isLoading, isError } = useDashboardSummary();
 
   const hasOverdue = summary.overdueOrders > 0;
   const hasLowStock = summary.lowStockCount > 0;
@@ -100,7 +61,7 @@ export function DashboardPage() {
         }
       />
 
-      {loadError ? (
+      {isError ? (
         <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm font-medium text-rose-700">
           No se pudo cargar el tablero. Revisá la conexión con la API.
         </div>
@@ -131,29 +92,34 @@ export function DashboardPage() {
       ) : null}
 
       {/* Métricas operativas */}
-      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      {isLoading ? (
+        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, i) => <StatCardSkeleton key={i} />)}
+        </section>
+      ) : null}
+      <section className={`grid gap-4 sm:grid-cols-2 xl:grid-cols-4 ${isLoading ? "hidden" : ""}`}>
         <MetricCard
           label="Presupuestos pendientes"
-          value={isLoading ? "—" : String(summary.pendingQuotes)}
+          value={String(summary.pendingQuotes)}
           sublabel="Borrador o enviados"
           href="/presupuestos"
         />
         <MetricCard
           label="Órdenes en proceso"
-          value={isLoading ? "—" : String(summary.pendingOrders)}
+          value={String(summary.pendingOrders)}
           sublabel="Pendientes, en corte o producción"
           href="/ordenes"
         />
         <MetricCard
           label="Trabajos atrasados"
-          value={isLoading ? "—" : String(summary.overdueOrders)}
+          value={String(summary.overdueOrders)}
           sublabel="Fecha prometida vencida"
           href="/ordenes"
           tone={hasOverdue ? "danger" : "neutral"}
         />
         <MetricCard
           label="Por cobrar"
-          value={isLoading ? "—" : formatCurrencyFromCents(summary.pendingPaymentsCents)}
+          value={formatCurrencyFromCents(summary.pendingPaymentsCents)}
           sublabel="Saldo pendiente de cobro"
           href="/caja"
           tone="info"
@@ -170,7 +136,7 @@ export function DashboardPage() {
             </Link>
           </div>
 
-          {isLoading ? <LoadingRows /> : null}
+          {isLoading ? <AgendaSkeleton /> : null}
 
           {!isLoading && summary.upcoming.length === 0 ? (
             <div className="rounded-xl border border-dashed border-line p-6 text-center text-sm text-stone-500">
@@ -231,6 +197,7 @@ export function DashboardPage() {
               value={isLoading ? "—" : formatCurrencyFromCents(summary.todayCashCents)}
               href="/caja"
             />
+
           </div>
 
           {/* Acciones rápidas */}
@@ -353,11 +320,11 @@ function SmallCard({
   return content;
 }
 
-function LoadingRows() {
+function AgendaSkeleton() {
   return (
     <div className="space-y-2">
-      {Array.from({ length: 3 }).map((_, index) => (
-        <div key={index} className="h-14 animate-pulse rounded-xl bg-stone-100" />
+      {Array.from({ length: 3 }).map((_, i) => (
+        <div key={i} className="h-14 animate-pulse rounded-xl bg-stone-100" />
       ))}
     </div>
   );

@@ -1,22 +1,14 @@
-import { scheduleStatuses, type Client } from "@crm/shared";
-import { useEffect, useState } from "react";
+import { scheduleStatuses } from "@crm/shared";
+import { useState } from "react";
 
 import { TopHeader } from "../../components/layout/top-header";
 import { DataTable } from "../../components/ui/data-table";
 import { FormField, TextArea, TextInput } from "../../components/ui/form-field";
+import { TableSkeleton } from "../../components/ui/skeleton";
 import { apiFetch } from "../../lib/api";
 import { scheduleStatusLabels, toSpanishLabel } from "../../lib/labels";
-
-type ApiResponse<T> = {
-  ok: boolean;
-  data: T;
-};
-
-type WorkOrderRow = {
-  id: string;
-  workOrderNumber: string;
-  clientName: string;
-};
+import { queryClient } from "../../lib/query-client";
+import { queryKeys, useClients, useSchedule, useWorkOrders } from "../../lib/queries";
 
 type ScheduleRow = {
   id: string;
@@ -44,39 +36,20 @@ const initialForm = {
 };
 
 export function SchedulePage() {
-  const [rows, setRows] = useState<ScheduleRow[]>([]);
-  const [clients, setClients] = useState<Client[]>([]);
-  const [workOrders, setWorkOrders] = useState<WorkOrderRow[]>([]);
+  const { data: rows = [], isLoading: scheduleLoading, isError: scheduleError } = useSchedule();
+  const { data: clients = [] } = useClients();
+  const { data: workOrders = [] } = useWorkOrders();
+  const isLoading = scheduleLoading;
   const [form, setForm] = useState(initialForm);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
-  const [feedback, setFeedback] = useState("Cargando agenda.");
+  const [feedback, setFeedback] = useState("");
 
-  useEffect(() => {
-    void loadPage();
-  }, []);
-
-  async function loadPage() {
-    setIsLoading(true);
-
-    try {
-      const [scheduleResponse, clientsResponse, workOrdersResponse] = await Promise.all([
-        apiFetch<ApiResponse<ScheduleRow[]>>("/schedule"),
-        apiFetch<ApiResponse<Client[]>>("/clients"),
-        apiFetch<ApiResponse<WorkOrderRow[]>>("/work-orders"),
-      ]);
-
-      setRows(scheduleResponse.data);
-      setClients(clientsResponse.data);
-      setWorkOrders(workOrdersResponse.data);
-      setFeedback(scheduleResponse.data.length > 0 ? "Agenda lista para operar." : "Todavía no hay agenda cargada.");
-    } catch {
-      setFeedback("No se pudo cargar la agenda.");
-    } finally {
-      setIsLoading(false);
-    }
-  }
+  const feedbackText = scheduleError
+    ? "No se pudo cargar la agenda."
+    : isLoading
+      ? "Cargando agenda…"
+      : feedback || (rows.length > 0 ? "Agenda lista para operar." : "Todavía no hay agenda cargada.");
 
   function openCreateForm() {
     setEditingId(null);
@@ -108,7 +81,7 @@ export function SchedulePage() {
         method: "PATCH",
         body: JSON.stringify({ status }),
       });
-      await loadPage();
+      await queryClient.invalidateQueries({ queryKey: queryKeys.schedule });
       setFeedback("Estado de agenda actualizado.");
     } catch {
       setFeedback("No se pudo cambiar el estado.");
@@ -117,15 +90,11 @@ export function SchedulePage() {
 
   async function handleDelete(row: ScheduleRow) {
     const confirmed = window.confirm(`¿Querés eliminar la agenda de ${row.clientName}?`);
-    if (!confirmed) {
-      return;
-    }
+    if (!confirmed) return;
 
     try {
-      await apiFetch(`/schedule/${row.id}`, {
-        method: "DELETE",
-      });
-      await loadPage();
+      await apiFetch(`/schedule/${row.id}`, { method: "DELETE" });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.schedule });
       setFeedback("Agenda eliminada.");
     } catch {
       setFeedback("No se pudo eliminar la agenda.");
@@ -150,7 +119,7 @@ export function SchedulePage() {
         }),
       });
 
-      await loadPage();
+      await queryClient.invalidateQueries({ queryKey: queryKeys.schedule });
       setShowForm(false);
       setFeedback(editingId ? "Agenda actualizada." : "Agenda creada.");
     } catch {
@@ -170,9 +139,9 @@ export function SchedulePage() {
         }
       />
 
-      <div className="rounded-2xl border border-line bg-white p-4 text-sm text-stone-600 shadow-panel">{feedback}</div>
+      <div className="rounded-2xl border border-line bg-white p-4 text-sm text-stone-600 shadow-panel">{feedbackText}</div>
 
-      {isLoading ? <LoadingRows /> : null}
+      {isLoading ? <TableSkeleton rows={5} cols={5} /> : null}
       {!isLoading ? (
         <DataTable
           columns={[
@@ -307,12 +276,3 @@ export function SchedulePage() {
   );
 }
 
-function LoadingRows() {
-  return (
-    <div className="space-y-3 rounded-2xl border border-line bg-white p-4 shadow-panel">
-      {Array.from({ length: 4 }).map((_, index) => (
-        <div key={index} className="h-12 animate-pulse rounded-xl bg-stone-100" />
-      ))}
-    </div>
-  );
-}

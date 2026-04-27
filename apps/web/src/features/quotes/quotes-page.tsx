@@ -3,29 +3,22 @@ import {
   calculateQuoteTotals,
   createQuoteSchema,
   formatCurrencyFromCents,
-  type Client,
 } from "@crm/shared";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 import { TopHeader } from "../../components/layout/top-header";
 import { DataTable } from "../../components/ui/data-table";
 import { FormField, TextArea, TextInput } from "../../components/ui/form-field";
+import { TableSkeleton } from "../../components/ui/skeleton";
 import { StatusBadge } from "../../components/ui/status-badge";
 import { ApiError, apiFetch, getApiBaseUrl } from "../../lib/api";
 import { quoteStatusLabels, toSpanishLabel } from "../../lib/labels";
+import { queryClient } from "../../lib/query-client";
+import { queryKeys, useClients, useGlassTypes, useQuotes, useServiceExtras } from "../../lib/queries";
 
 type ApiResponse<T> = {
   ok: boolean;
   data: T;
-};
-
-type GlassTypeRow = {
-  id: string;
-  name: string;
-  thicknessMm: number;
-  color: string;
-  pricePerM2Cents: number;
-  isActive: boolean;
 };
 
 type ServiceExtraRow = {
@@ -151,18 +144,21 @@ function matchesFilter(status: string, filter: StatusFilterKey): boolean {
 }
 
 export function QuotesPage() {
-  const [quotes, setQuotes] = useState<QuoteRow[]>([]);
+  const { data: quotes = [], isLoading: isListLoading } = useQuotes();
+  const { data: allClients = [] } = useClients();
+  const { data: allGlassTypes = [] } = useGlassTypes();
+  const { data: allServiceExtras = [] } = useServiceExtras();
+
+  const clients = allClients;
+  const glassTypes = allGlassTypes.filter((g) => g.isActive);
+  const serviceExtras = allServiceExtras.filter((e) => e.isActive);
+
   const [statusFilter, setStatusFilter] = useState<StatusFilterKey>("all");
   const [selectedQuoteId, setSelectedQuoteId] = useState<string | null>(null);
   const [selectedQuote, setSelectedQuote] = useState<QuoteDetail | null>(null);
-  const [clients, setClients] = useState<Client[]>([]);
-  const [glassTypes, setGlassTypes] = useState<GlassTypeRow[]>([]);
-  const [serviceExtras, setServiceExtras] = useState<ServiceExtraRow[]>([]);
   const [form, setForm] = useState(createEmptyForm());
   const [editingQuoteId, setEditingQuoteId] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
-  const [catalogsLoaded, setCatalogsLoaded] = useState(false);
-  const [isListLoading, setIsListLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -171,82 +167,47 @@ export function QuotesPage() {
     [quotes, statusFilter],
   );
 
-  useEffect(() => {
-    setIsListLoading(true);
-    apiFetch<ApiResponse<QuoteRow[]>>("/quotes")
-      .then((response) => {
-        setQuotes(response.data);
-        setSelectedQuoteId(response.data[0]?.id ?? null);
-      })
-      .catch(() => setErrorMessage("No se pudieron cargar los presupuestos."))
-      .finally(() => setIsListLoading(false));
-  }, []);
-
-  useEffect(() => {
-    if (!selectedQuoteId) {
-      setSelectedQuote(null);
-      return;
-    }
-    apiFetch<ApiResponse<QuoteDetail>>(`/quotes/${selectedQuoteId}`)
-      .then((response) => setSelectedQuote(response.data))
+  function selectQuote(id: string) {
+    if (id === selectedQuoteId) return;
+    setSelectedQuoteId(id);
+    setSelectedQuote(null);
+    apiFetch<ApiResponse<QuoteDetail>>(`/quotes/${id}`)
+      .then((res) => setSelectedQuote(res.data))
       .catch(() => setSelectedQuote(null));
-  }, [selectedQuoteId]);
-
-  async function ensureCatalogs() {
-    if (catalogsLoaded) {
-      return {
-        clients,
-        glassTypes,
-        serviceExtras,
-      };
-    }
-
-    const [clientsResponse, glassTypesResponse, serviceExtrasResponse] = await Promise.all([
-      apiFetch<ApiResponse<Client[]>>("/clients"),
-      apiFetch<ApiResponse<GlassTypeRow[]>>("/settings/glass-types"),
-      apiFetch<ApiResponse<ServiceExtraRow[]>>("/settings/service-extras"),
-    ]);
-
-    setClients(clientsResponse.data);
-    setGlassTypes(glassTypesResponse.data.filter((row) => row.isActive));
-    setServiceExtras(serviceExtrasResponse.data.filter((row) => row.isActive));
-    setCatalogsLoaded(true);
-
-    return {
-      clients: clientsResponse.data,
-      glassTypes: glassTypesResponse.data.filter((row) => row.isActive),
-      serviceExtras: serviceExtrasResponse.data.filter((row) => row.isActive),
-    };
   }
 
-  const calculatedItems = form.items
-    .map((item) => {
-      const widthMm = Number(item.widthMm);
-      const heightMm = Number(item.heightMm);
-      const quantity = Number(item.quantity);
-      const pricePerM2Cents = Number(item.pricePerM2Cents);
+  const calculatedItems = useMemo(
+    () =>
+      form.items
+        .map((item) => {
+          const widthMm = Number(item.widthMm);
+          const heightMm = Number(item.heightMm);
+          const quantity = Number(item.quantity);
+          const pricePerM2Cents = Number(item.pricePerM2Cents);
 
-      if (!widthMm || !heightMm || !quantity || Number.isNaN(pricePerM2Cents)) {
-        return null;
-      }
+          if (!widthMm || !heightMm || !quantity || Number.isNaN(pricePerM2Cents)) {
+            return null;
+          }
 
-      return calculateQuoteItem({
-        widthMm,
-        heightMm,
-        quantity,
-        pricePerM2Cents,
-        extras: item.selectedExtraIds
-          .map((extraId) => serviceExtras.find((extra) => extra.id === extraId))
-          .filter((extra): extra is ServiceExtraRow => Boolean(extra))
-          .map((extra) => ({
-            extraId: extra.id,
-            label: extra.name,
-            pricingMode: extra.pricingMode,
-            unitPriceCents: extra.unitPriceCents,
-          })),
-      });
-    })
-    .filter((item): item is NonNullable<typeof item> => Boolean(item));
+          return calculateQuoteItem({
+            widthMm,
+            heightMm,
+            quantity,
+            pricePerM2Cents,
+            extras: item.selectedExtraIds
+              .map((extraId) => serviceExtras.find((extra) => extra.id === extraId))
+              .filter((extra): extra is ServiceExtraRow => Boolean(extra))
+              .map((extra) => ({
+                extraId: extra.id,
+                label: extra.name,
+                pricingMode: extra.pricingMode,
+                unitPriceCents: extra.unitPriceCents,
+              })),
+          });
+        })
+        .filter((item): item is NonNullable<typeof item> => Boolean(item)),
+    [form.items, serviceExtras],
+  );
 
   const totals = useMemo(
     () => (calculatedItems.length > 0 ? calculateQuoteTotals(calculatedItems) : null),
@@ -289,23 +250,18 @@ export function QuotesPage() {
     }));
   }
 
-  async function openCreateForm() {
-    const catalogs = await ensureCatalogs();
+  function openCreateForm() {
     setEditingQuoteId(null);
     setForm({
       ...createEmptyForm(),
-      clientId: catalogs.clients[0]?.id ?? "",
+      clientId: clients[0]?.id ?? "",
     });
     setErrorMessage(null);
     setShowForm(true);
   }
 
-  async function openEditForm() {
-    if (!selectedQuote) {
-      return;
-    }
-
-    await ensureCatalogs();
+  function openEditForm() {
+    if (!selectedQuote) return;
     setEditingQuoteId(selectedQuote.id);
     setForm({
       clientId: selectedQuote.clientId,
@@ -386,23 +342,9 @@ export function QuotesPage() {
       });
 
       const saved = response.data;
-      const savedRow: QuoteRow = {
-        id: saved.id,
-        quoteNumber: saved.quoteNumber,
-        clientId: saved.clientId,
-        status: saved.status,
-        issueDate: saved.issueDate,
-        totalCents: saved.totalCents,
-        clientName: saved.clientName,
-      };
-
-      if (editingQuoteId) {
-        setQuotes((current) => current.map((q) => (q.id === saved.id ? savedRow : q)));
-      } else {
-        setQuotes((current) => [savedRow, ...current]);
-      }
       setSelectedQuote(saved);
       setSelectedQuoteId(saved.id);
+      await queryClient.invalidateQueries({ queryKey: queryKeys.quotes });
       setShowForm(false);
       setEditingQuoteId(null);
     } catch {
@@ -415,11 +357,9 @@ export function QuotesPage() {
   async function handleApprove(quoteId: string) {
     try {
       await apiFetch(`/quotes/${quoteId}/approve`, { method: "POST" });
-      // Optimistic: update status in list
-      setQuotes((current) => current.map((q) => (q.id === quoteId ? { ...q, status: "approved" } : q)));
-      // Reload detail only (not the full list)
       const detail = await apiFetch<ApiResponse<QuoteDetail>>(`/quotes/${quoteId}`);
       setSelectedQuote(detail.data);
+      await queryClient.invalidateQueries({ queryKey: queryKeys.quotes });
     } catch {
       setErrorMessage("No se pudo aprobar el presupuesto.");
     }
@@ -431,11 +371,11 @@ export function QuotesPage() {
 
     try {
       await apiFetch(`/quotes/${quote.id}`, { method: "DELETE" });
-      setQuotes((current) => current.filter((q) => q.id !== quote.id));
       if (selectedQuoteId === quote.id) {
         setSelectedQuoteId(null);
         setSelectedQuote(null);
       }
+      await queryClient.invalidateQueries({ queryKey: queryKeys.quotes });
     } catch (error) {
       if (error instanceof ApiError) {
         setErrorMessage(error.message);
@@ -451,7 +391,7 @@ export function QuotesPage() {
         title="Presupuestos"
         description="Alta, edición, PDF y aprobación con el flujo más corto posible."
         action={
-          <button type="button" onClick={() => void openCreateForm()} className="rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white">
+          <button type="button" onClick={openCreateForm} className="rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-white">
             Nuevo presupuesto
           </button>
         }
@@ -484,7 +424,7 @@ export function QuotesPage() {
 
       <section className="grid gap-6 xl:grid-cols-[1.1fr,0.9fr]">
         <div className="space-y-3">
-          {isListLoading ? <LoadingRows /> : null}
+          {isListLoading ? <TableSkeleton rows={5} cols={4} /> : null}
           {!isListLoading ? (
             <DataTable
               columns={[
@@ -492,7 +432,7 @@ export function QuotesPage() {
                   key: "quoteNumber",
                   header: "Número",
                   render: (row) => (
-                    <button type="button" onClick={() => setSelectedQuoteId(row.id)} className="text-left font-semibold text-ink hover:text-accent">
+                    <button type="button" onClick={() => selectQuote(row.id)} className="text-left font-semibold text-ink hover:text-accent">
                       {row.quoteNumber}
                     </button>
                   ),
@@ -522,7 +462,7 @@ export function QuotesPage() {
         </div>
 
         <div className="rounded-[28px] border border-white/60 bg-white/80 p-5 shadow-[0_20px_45px_rgba(92,74,46,0.08)] backdrop-blur">
-          {isDetailLoading ? <LoadingRows /> : null}
+          {isDetailLoading ? <TableSkeleton rows={3} cols={2} /> : null}
           {!isDetailLoading && selectedQuote ? (
             <div className="space-y-5">
               <div className="flex items-start justify-between gap-4">
@@ -748,16 +688,6 @@ export function QuotesPage() {
           </div>
         </div>
       ) : null}
-    </div>
-  );
-}
-
-function LoadingRows() {
-  return (
-    <div className="space-y-3 rounded-2xl border border-line bg-white p-4 shadow-panel">
-      {Array.from({ length: 4 }).map((_, index) => (
-        <div key={index} className="h-12 animate-pulse rounded-xl bg-stone-100" />
-      ))}
     </div>
   );
 }

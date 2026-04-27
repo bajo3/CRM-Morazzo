@@ -1,26 +1,15 @@
 import { stockMovementTypes } from "@crm/shared";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 import { TopHeader } from "../../components/layout/top-header";
 import { DataTable } from "../../components/ui/data-table";
 import { FormField, TextArea, TextInput } from "../../components/ui/form-field";
+import { TableSkeleton } from "../../components/ui/skeleton";
 import { StatusBadge } from "../../components/ui/status-badge";
 import { apiFetch } from "../../lib/api";
 import { stockMovementLabels, toSpanishLabel } from "../../lib/labels";
-
-type ApiResponse<T> = {
-  ok: boolean;
-  data: T;
-};
-
-type GlassTypeRow = {
-  id: string;
-  name: string;
-  thicknessMm: number;
-  color: string;
-  pricePerM2Cents: number;
-  isActive: boolean;
-};
+import { queryClient } from "../../lib/query-client";
+import { queryKeys, useGlassTypes, useStockMovements, useStockSheets, useStockSummary } from "../../lib/queries";
 
 type StockSheetRow = {
   id: string;
@@ -47,12 +36,6 @@ type StockMovementRow = {
   location: string | null;
 };
 
-type StockSummary = {
-  totalSheets: number;
-  lowStockCount: number;
-  lowStock: StockSheetRow[];
-};
-
 const initialSheetForm = {
   glassTypeId: "",
   typeLabel: "",
@@ -73,46 +56,30 @@ const initialMovementForm = {
 };
 
 export function StockPage() {
-  const [glassTypes, setGlassTypes] = useState<GlassTypeRow[]>([]);
-  const [sheets, setSheets] = useState<StockSheetRow[]>([]);
-  const [movements, setMovements] = useState<StockMovementRow[]>([]);
-  const [summary, setSummary] = useState<StockSummary | null>(null);
+  const { data: allGlassTypes = [], isLoading: glassLoading } = useGlassTypes();
+  const { data: sheets = [], isLoading: sheetsLoading } = useStockSheets();
+  const { data: movements = [], isLoading: movementsLoading } = useStockMovements();
+  const { data: summary = null, isLoading: summaryLoading } = useStockSummary();
+
+  const isLoading = glassLoading || sheetsLoading || movementsLoading || summaryLoading;
+  const glassTypes = allGlassTypes.filter((g) => g.isActive);
+
   const [sheetForm, setSheetForm] = useState(initialSheetForm);
   const [movementForm, setMovementForm] = useState(initialMovementForm);
   const [editingSheetId, setEditingSheetId] = useState<string | null>(null);
   const [editingMovementId, setEditingMovementId] = useState<string | null>(null);
   const [showSheetForm, setShowSheetForm] = useState(false);
   const [showMovementForm, setShowMovementForm] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
-  const [feedback, setFeedback] = useState("Cargando stock.");
+  const [feedback, setFeedback] = useState("");
 
   const lowStockIds = useMemo(() => new Set(summary?.lowStock.map((item) => item.id) ?? []), [summary]);
 
-  useEffect(() => {
-    void loadData();
-  }, []);
-
-  async function loadData() {
-    setIsLoading(true);
-
-    try {
-      const [glassResponse, sheetsResponse, movementsResponse, summaryResponse] = await Promise.all([
-        apiFetch<ApiResponse<GlassTypeRow[]>>("/settings/glass-types"),
-        apiFetch<ApiResponse<StockSheetRow[]>>("/stock/sheets"),
-        apiFetch<ApiResponse<StockMovementRow[]>>("/stock/movements"),
-        apiFetch<ApiResponse<StockSummary>>("/stock/summary"),
-      ]);
-
-      setGlassTypes(glassResponse.data.filter((row) => row.isActive));
-      setSheets(sheetsResponse.data);
-      setMovements(movementsResponse.data);
-      setSummary(summaryResponse.data);
-      setFeedback("Stock listo para operar.");
-    } catch {
-      setFeedback("No se pudo cargar el stock.");
-    } finally {
-      setIsLoading(false);
-    }
+  async function invalidateStock() {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.stockSheets }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.stockMovements }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.stockSummary }),
+    ]);
   }
 
   function openSheetForm(sheet?: StockSheetRow) {
@@ -176,7 +143,7 @@ export function StockPage() {
         }),
       });
 
-      await loadData();
+      await invalidateStock();
       setShowSheetForm(false);
       setFeedback(editingSheetId ? "Hoja actualizada." : "Hoja creada.");
     } catch {
@@ -198,7 +165,7 @@ export function StockPage() {
         }),
       });
 
-      await loadData();
+      await invalidateStock();
       setShowMovementForm(false);
       setFeedback(editingMovementId ? "Movimiento actualizado." : "Movimiento registrado.");
     } catch {
@@ -216,7 +183,7 @@ export function StockPage() {
       await apiFetch(`/stock/sheets/${sheet.id}`, {
         method: "DELETE",
       });
-      await loadData();
+      await invalidateStock();
       setFeedback("Hoja eliminada.");
     } catch {
       setFeedback("No se pudo eliminar la hoja. Si tiene movimientos, queda bloqueada.");
@@ -233,7 +200,7 @@ export function StockPage() {
       await apiFetch(`/stock/movements/${movement.id}`, {
         method: "DELETE",
       });
-      await loadData();
+      await invalidateStock();
       setFeedback("Movimiento eliminado.");
     } catch {
       setFeedback("No se pudo eliminar el movimiento.");
@@ -260,10 +227,12 @@ export function StockPage() {
       <section className="grid gap-4 md:grid-cols-3">
         <MetricCard label="Hojas totales" value={String(summary?.totalSheets ?? 0)} />
         <MetricCard label="Stock bajo" value={String(summary?.lowStockCount ?? 0)} />
-        <div className="rounded-2xl border border-line bg-white p-5 text-sm text-stone-600 shadow-panel">{feedback}</div>
+        <div className="rounded-2xl border border-line bg-white p-5 text-sm text-stone-600 shadow-panel">
+          {isLoading ? "Cargando stock…" : feedback || "Stock listo para operar."}
+        </div>
       </section>
 
-      {isLoading ? <LoadingRows /> : null}
+      {isLoading ? <TableSkeleton rows={5} cols={5} /> : null}
       {!isLoading ? (
         <section className="space-y-6">
           <DataTable
@@ -467,12 +436,3 @@ function MetricCard({ label, value }: { label: string; value: string }) {
   );
 }
 
-function LoadingRows() {
-  return (
-    <div className="space-y-3 rounded-2xl border border-line bg-white p-4 shadow-panel">
-      {Array.from({ length: 4 }).map((_, index) => (
-        <div key={index} className="h-12 animate-pulse rounded-xl bg-stone-100" />
-      ))}
-    </div>
-  );
-}

@@ -1,11 +1,14 @@
 import { createClientSchema, type Client } from "@crm/shared";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { TopHeader } from "../../components/layout/top-header";
 import { DataTable } from "../../components/ui/data-table";
 import { FormField, TextArea, TextInput } from "../../components/ui/form-field";
+import { TableSkeleton } from "../../components/ui/skeleton";
 import { ApiError, apiFetch } from "../../lib/api";
+import { queryClient } from "../../lib/query-client";
+import { queryKeys, useClients } from "../../lib/queries";
 
 type ApiResponse<T> = {
   ok: boolean;
@@ -21,16 +24,13 @@ const initialForm = {
 };
 
 export function ClientsPage() {
-  const [clients, setClients] = useState<Client[]>([]);
+  const { data: clients = [], isLoading, isError } = useClients();
   const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [form, setForm] = useState(initialForm);
   const [editingClientId, setEditingClientId] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
-  const [feedback, setFeedback] = useState("Cargando clientes.");
-  const [feedbackTone, setFeedbackTone] = useState<"neutral" | "error">("neutral");
   const [formError, setFormError] = useState<string | null>(null);
 
   const filteredClients = useMemo(() => {
@@ -49,21 +49,15 @@ export function ClientsPage() {
     [clients, selectedClientId],
   );
 
-  useEffect(() => {
-    setIsLoading(true);
-    apiFetch<ApiResponse<Client[]>>("/clients")
-      .then((response) => {
-        setClients(response.data);
-        setSelectedClientId(response.data[0]?.id ?? null);
-        setFeedback(response.data.length > 0 ? `${response.data.length} clientes.` : "Sin clientes todavía.");
-        setFeedbackTone("neutral");
-      })
-      .catch(() => {
-        setFeedback("No se pudieron cargar los clientes.");
-        setFeedbackTone("error");
-      })
-      .finally(() => setIsLoading(false));
-  }, []);
+  const feedbackText = isError
+    ? "No se pudieron cargar los clientes."
+    : isLoading
+      ? "Cargando…"
+      : searchQuery
+        ? `${filteredClients.length} resultado/s`
+        : clients.length > 0
+          ? `${clients.length} clientes.`
+          : "Sin clientes todavía.";
 
   function updateField(field: keyof typeof initialForm, value: string) {
     setForm((current) => ({ ...current, [field]: value }));
@@ -114,21 +108,15 @@ export function ClientsPage() {
           method: "PUT",
           body: JSON.stringify(parsed.data),
         });
-        setClients((current) => current.map((c) => (c.id === response.data.id ? response.data : c)));
         setSelectedClientId(response.data.id);
-        setFeedback("Cliente actualizado.");
       } else {
         const response = await apiFetch<ApiResponse<Client>>("/clients", {
           method: "POST",
           body: JSON.stringify(parsed.data),
         });
-        setClients((current) =>
-          [...current, response.data].sort((a, b) => a.name.localeCompare(b.name, "es-AR")),
-        );
         setSelectedClientId(response.data.id);
-        setFeedback("Cliente creado.");
       }
-      setFeedbackTone("neutral");
+      await queryClient.invalidateQueries({ queryKey: queryKeys.clients });
       setShowForm(false);
       setEditingClientId(null);
     } catch {
@@ -146,17 +134,11 @@ export function ClientsPage() {
 
     try {
       await apiFetch(`/clients/${client.id}`, { method: "DELETE" });
-      setClients((current) => current.filter((c) => c.id !== client.id));
       if (selectedClientId === client.id) setSelectedClientId(null);
-      setFeedback("Cliente eliminado.");
-      setFeedbackTone("neutral");
+      await queryClient.invalidateQueries({ queryKey: queryKeys.clients });
     } catch (error) {
-      if (error instanceof ApiError) {
-        setFeedback(error.message);
-      } else {
-        setFeedback("No se pudo eliminar el cliente.");
-      }
-      setFeedbackTone("error");
+      const msg = error instanceof ApiError ? error.message : "No se pudo eliminar el cliente.";
+      window.alert(msg);
     }
   }
 
@@ -199,12 +181,12 @@ export function ClientsPage() {
 
           <div
             className={`rounded-2xl border px-4 py-2.5 text-sm shadow-panel ${
-              feedbackTone === "error"
+              isError
                 ? "border-rose-200 bg-rose-50 font-medium text-rose-700"
                 : "border-line bg-white text-stone-600"
             }`}
           >
-            {isLoading ? "Cargando..." : searchQuery ? `${filteredClients.length} resultado/s` : feedback}
+            {feedbackText}
           </div>
 
           {isLoading ? <LoadingRows /> : null}
@@ -378,13 +360,7 @@ export function ClientsPage() {
 }
 
 function LoadingRows() {
-  return (
-    <div className="space-y-3 rounded-2xl border border-line bg-white p-4 shadow-panel">
-      {Array.from({ length: 5 }).map((_, index) => (
-        <div key={index} className="h-11 animate-pulse rounded-xl bg-stone-100" />
-      ))}
-    </div>
-  );
+  return <TableSkeleton rows={5} cols={4} />;
 }
 
 function InfoRow({

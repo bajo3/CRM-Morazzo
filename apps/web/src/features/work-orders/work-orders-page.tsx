@@ -1,12 +1,15 @@
 import { workOrderStatuses } from "@crm/shared";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 import { TopHeader } from "../../components/layout/top-header";
 import { DataTable } from "../../components/ui/data-table";
 import { FormField, TextArea, TextInput } from "../../components/ui/form-field";
+import { TableSkeleton } from "../../components/ui/skeleton";
 import { StatusBadge } from "../../components/ui/status-badge";
 import { apiFetch } from "../../lib/api";
 import { toSpanishLabel, workOrderStatusLabels } from "../../lib/labels";
+import { queryClient } from "../../lib/query-client";
+import { queryKeys, useWorkOrders } from "../../lib/queries";
 
 type ApiResponse<T> = {
   ok: boolean;
@@ -62,37 +65,20 @@ function getStatusTone(status: string): "neutral" | "info" | "success" | "warnin
 }
 
 export function WorkOrdersPage() {
-  const [rows, setRows] = useState<WorkOrderRow[]>([]);
+  const { data: rows = [], isLoading, isError } = useWorkOrders();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedOrder, setSelectedOrder] = useState<WorkOrderDetail | null>(null);
   const [isDetailLoading, setIsDetailLoading] = useState(false);
   const [statusValue, setStatusValue] = useState<string>("pending");
   const [promisedDate, setPromisedDate] = useState("");
   const [internalNotes, setInternalNotes] = useState("");
-  const [isLoading, setIsLoading] = useState(true);
-  const [message, setMessage] = useState("Cargando órdenes.");
+  const [message, setMessage] = useState("");
 
-  useEffect(() => {
-    setIsLoading(true);
-    apiFetch<ApiResponse<WorkOrderRow[]>>("/work-orders")
-      .then((response) => {
-        setRows(response.data);
-        const first = response.data[0]?.id ?? null;
-        setSelectedId(first);
-        setMessage(response.data.length > 0 ? "Órdenes listas." : "Sin órdenes todavía.");
-      })
-      .catch(() => setMessage("No se pudieron cargar las órdenes."))
-      .finally(() => setIsLoading(false));
-  }, []);
-
-  useEffect(() => {
-    if (!selectedId) {
-      setSelectedOrder(null);
-      return;
-    }
-
+  function selectOrder(id: string) {
+    if (id === selectedId) return;
+    setSelectedId(id);
     setIsDetailLoading(true);
-    apiFetch<ApiResponse<WorkOrderDetail>>(`/work-orders/${selectedId}`)
+    apiFetch<ApiResponse<WorkOrderDetail>>(`/work-orders/${id}`)
       .then((response) => {
         setSelectedOrder(response.data);
         setStatusValue(response.data.status);
@@ -101,36 +87,21 @@ export function WorkOrdersPage() {
       })
       .catch(() => setSelectedOrder(null))
       .finally(() => setIsDetailLoading(false));
-  }, [selectedId]);
-
-  function selectOrder(id: string) {
-    if (id === selectedId) {
-      // Same ID: force re-fetch by resetting first
-      setSelectedId(null);
-      requestAnimationFrame(() => setSelectedId(id));
-    } else {
-      setSelectedId(id);
-    }
   }
 
   async function handleQuickStatusChange(row: WorkOrderRow, status: string) {
-    // Optimistic update: update list immediately
-    setRows((current) => current.map((r) => (r.id === row.id ? { ...r, status } : r)));
-
     try {
       await apiFetch(`/work-orders/${row.id}/status`, {
         method: "PATCH",
         body: JSON.stringify({ status }),
       });
-      // If this order is open in the detail panel, sync it too
       if (selectedId === row.id && selectedOrder) {
         setSelectedOrder((current) => (current ? { ...current, status } : null));
         setStatusValue(status);
       }
+      await queryClient.invalidateQueries({ queryKey: queryKeys.workOrders });
       setMessage("Estado actualizado.");
     } catch {
-      // Revert optimistic update
-      setRows((current) => current.map((r) => (r.id === row.id ? { ...r, status: row.status } : r)));
       setMessage("No se pudo actualizar el estado.");
     }
   }
@@ -147,20 +118,12 @@ export function WorkOrdersPage() {
           internalNotes: internalNotes || null,
         }),
       });
-      // Update list row
-      setRows((current) =>
-        current.map((r) =>
-          r.id === selectedOrder.id
-            ? { ...r, status: statusValue, promisedDate: promisedDate || null }
-            : r,
-        ),
-      );
-      // Update detail state
       setSelectedOrder((current) =>
         current
           ? { ...current, status: statusValue, promisedDate: promisedDate || null, internalNotes: internalNotes || null }
           : null,
       );
+      await queryClient.invalidateQueries({ queryKey: queryKeys.workOrders });
       setMessage("Orden actualizada.");
     } catch {
       setMessage("No se pudo guardar la orden.");
@@ -175,11 +138,11 @@ export function WorkOrdersPage() {
 
     try {
       await apiFetch(`/work-orders/${order.id}`, { method: "DELETE" });
-      setRows((current) => current.filter((r) => r.id !== order.id));
       if (selectedId === order.id) {
         setSelectedId(null);
         setSelectedOrder(null);
       }
+      await queryClient.invalidateQueries({ queryKey: queryKeys.workOrders });
       setMessage("Orden eliminada.");
     } catch {
       setMessage("No se pudo eliminar. Si tiene pagos o agenda, queda bloqueada.");
@@ -201,10 +164,12 @@ export function WorkOrdersPage() {
         <MetricCard label="En proceso" value={String(activeCount)} />
         <MetricCard label="Atrasadas" value={String(overdueCount)} tone={overdueCount > 0 ? "danger" : "neutral"} />
         <MetricCard label="Listas p/ entregar" value={String(readyCount)} tone={readyCount > 0 ? "info" : "neutral"} />
-        <div className="rounded-2xl border border-line bg-white p-5 text-sm text-stone-600 shadow-panel">{message}</div>
+        <div className="rounded-2xl border border-line bg-white p-5 text-sm text-stone-600 shadow-panel">
+          {isLoading ? "Cargando órdenes…" : isError ? "Error al cargar." : message || `${rows.length} órdenes.`}
+        </div>
       </section>
 
-      {isLoading ? <LoadingRows /> : null}
+      {isLoading ? <TableSkeleton rows={5} cols={5} /> : null}
       {!isLoading ? (
         <section className="grid gap-6 xl:grid-cols-[1fr,0.95fr]">
           <DataTable
