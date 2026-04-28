@@ -19,7 +19,12 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "erasableSyntaxOnly": true,
-    "noFallthroughCasesInSwitch": true
+    "noFallthroughCasesInSwitch": true,
+
+    /* Monorepo: resolve @crm/shared from source (dist is gitignored) */
+    "paths": {
+      "@crm/shared": ["../../packages/shared/src/index.ts"]
+    }
   },
   "include": ["src"]
 }
